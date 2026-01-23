@@ -1,13 +1,47 @@
+import os
 import telebot
 from telebot import types
 import time
 import threading
+from flask import Flask, request  # ← ДОБАВЬТЕ
 
 TOKEN = "8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE"
 bot = telebot.TeleBot(TOKEN)
 
+# ======== Flask приложение ========
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route('/' + TOKEN, methods=['POST'])
+def getMessage():
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "!", 200
+
+@app.route("/setwebhook")
+def set_webhook():
+    bot.remove_webhook()
+    time.sleep(1)
+    bot.set_webhook(url=f"https://your-app-name.onrender.com/{TOKEN}")
+    return "Webhook set!", 200
+
+# ======== ВАШ ОСНОВНОЙ КОД ========
 search_queue = []
 active_pairs = {}
+
+# ... ваш остальной код (background_search, хендлеры и т.д.) ...
+
+if __name__ == "__main__":
+    # Запускаем фоновый поток поиска
+    threading.Thread(target=background_search, daemon=True).start()
+    
+    # Запускаем Flask сервер на порту Render
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 # ======== ФУНКЦИЯ ФОНОВОГО ПОИСКА ========
 def background_search():
@@ -366,3 +400,4 @@ if __name__ == "__main__":
         print(f"❌ Ошибка: {e}")
         print("🔄 Перезапуск через 10 секунд...")
         time.sleep(10)
+
