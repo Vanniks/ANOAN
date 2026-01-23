@@ -73,92 +73,39 @@ connect_thread.start()
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.chat.id
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_search = types.KeyboardButton('🔍 Начать поиск')
-    markup.add(btn_search)
     
-    bot.send_message(
-        user_id,
-        "👋 Привет! Я бот для анонимного общения.\n"
-        "Нажми кнопку ниже, чтобы найти собеседника.",
-        reply_markup=markup
-    )
-    
-    # Удаляем из всех очередей при перезапуске
+    # Очищаем предыдущие состояния
     if user_id in search_queue:
         search_queue.remove(user_id)
     if user_id in active_pairs:
         partner_id = active_pairs[user_id]
         del active_pairs[user_id]
         del active_pairs[partner_id]
-        bot.send_message(partner_id, "❌ Собеседник перезапустил бота.")
-
-# Обработчик кнопки поиска
-@bot.message_handler(func=lambda msg: msg.text == '🔍 Начать поиск')
-def search(message):
-    user_id = message.chat.id
-    
-    if user_id in active_pairs:
-        bot.send_message(user_id, "❌ У тебя уже есть собеседник! Используй /stop чтобы завершить текущий диалог.")
-        return
-    
-    if user_id in search_queue:
-        bot.send_message(user_id, "🔍 Ты уже в очереди поиска...")
-        return
-    
-    # Добавляем в очередь
-    search_queue.append(user_id)
-    bot.send_message(user_id, "🔍 Ищем собеседника...")
-    print(f"🔍 Пользователь {user_id} добавлен в поиск")
-
-# Обработчик инлайн-кнопок
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    user_id = call.message.chat.id
-    
-    if call.data == 'start_search':
-        # Удаляем старые сообщения с кнопками
-        try:
-            bot.delete_message(user_id, call.message.message_id)
-        except:
-            pass
         
-        # Запускаем поиск
-        if user_id in active_pairs:
-            bot.answer_callback_query(call.id, "❌ У тебя уже есть собеседник!")
-            return
-        
-        if user_id in search_queue:
-            bot.answer_callback_query(call.id, "🔍 Ты уже в очереди поиска...")
-            return
-        
-        # Добавляем в очередь
-        search_queue.append(user_id)
-        bot.send_message(user_id, "🔍 Ищем собеседника...")
-        bot.answer_callback_query(call.id, "✅ Начинаем поиск...")
-        
-    elif call.data == 'stop_search':
-        # Удаляем старые сообщения с кнопками
-        try:
-            bot.delete_message(user_id, call.message.message_id)
-        except:
-            pass
-        
-        # Останавливаем поиск
-        if user_id in search_queue:
-            search_queue.remove(user_id)
-        
+        # Уведомляем партнёра
         markup = types.InlineKeyboardMarkup()
         btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
         markup.add(btn_search)
         
         bot.send_message(
-            user_id,
-            "✅ Поиск остановлен.\n\n"
-            "Нажми кнопку ниже, чтобы начать поиск заново:",
+            partner_id,
+            "⚠️ Собеседник перезапустил бота.\n\n"
+            "Нажми кнопку ниже, чтобы найти нового собеседника:",
             reply_markup=markup
         )
-        bot.answer_callback_query(call.id, "✅ Поиск остановлен")
+    
+    # Показываем инлайн-кнопку
+    markup = types.InlineKeyboardMarkup()
+    btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+    markup.add(btn_search)
+    
+    bot.send_message(
+        user_id,
+        "👋 *Привет! Я бот для анонимного общения.*\n\n"
+        "Нажми кнопку ниже, чтобы найти собеседника:",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
 # Команда /stop - остановить диалог
 @bot.message_handler(commands=['stop'])
@@ -243,5 +190,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"🌐 Flask запущен на порту {port}")
     app.run(host="0.0.0.0", port=port)
+
 
 
