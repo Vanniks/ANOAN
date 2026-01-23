@@ -1,1 +1,1 @@
-worker: python anon_chat.py
+worker: bash setup.sh
