@@ -1,5 +1,4 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import telebot
 import random
 
 TOKEN = "8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE"
@@ -54,4 +53,5 @@ def chat(message):
         bot.send_message(user_id, "Напиши /find чтобы начать чат")
 
 bot.polling(none_stop=True)
+
 
