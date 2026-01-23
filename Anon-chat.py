@@ -123,19 +123,69 @@ def next_chat(message):
     # Получаем текущего собеседника
     partner_id = active_pairs[user_id]
     
-    # Уведомляем собеседника
-    bot.send_message(partner_id, "⚠️ Твой собеседник покинул диалог.\nИспользуй /next для поиска нового.")
+    # 1. Уведомляем собеседника о разрыве (ЕМУ НЕ ИЩЕМ НОВОГО!)
+    markup_partner = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_search = types.KeyboardButton('🔍 Начать поиск')
+    markup_partner.add(btn_search)
     
-    # Разрываем текущую связь
+    partner_message = (
+        "⚠️ *Твой собеседник покинул диалог.*\n\n"
+        "📋 *Доступные команды:*\n"
+        "Нажми кнопку ниже, чтобы найти нового собеседника\n"
+        "или используй /stop чтобы выйти\n\n"
+        "📢 *Приглашай друзей в бота:*\n"
+        "@OnonChatTg_Bot"
+    )
+    
+    try:
+        bot.send_message(
+            partner_id,
+            partner_message,
+            reply_markup=markup_partner,
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(
+            partner_id,
+            "⚠️ Твой собеседник покинул диалог.\n\nНажми '🔍 Начать поиск' чтобы найти нового собеседника.",
+            reply_markup=markup_partner
+        )
+    
+    # 2. Удаляем пару из active_pairs
     del active_pairs[user_id]
     del active_pairs[partner_id]
     
-    # Добавляем обоих обратно в поиск
+    # 3. ТОЛЬКО тот, кто написал /next, идёт в поиск
     search_queue.append(user_id)
-    search_queue.append(partner_id)
     
-    bot.send_message(user_id, "🔄 Ищем нового собеседника...")
-    bot.send_message(partner_id, "🔄 Ищем нового собеседника...")
+    # 4. Сообщаем тому, кто написал /next
+    markup_user = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_stop = types.KeyboardButton('/stop')
+    markup_user.add(btn_stop)
+    
+    user_message = (
+        "🔄 *Ищем нового собеседника...*\n\n"
+        "📋 *Пока ждёшь:*\n"
+        "Используй /stop чтобы отменить поиск\n\n"
+        "📢 *Приглашай друзей в бота:*\n"
+        "@OnonChatTg_Bot"
+    )
+    
+    try:
+        bot.send_message(
+            user_id,
+            user_message,
+            reply_markup=markup_user,
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(
+            user_id,
+            "🔄 Ищем нового собеседника...\n\nИспользуй /stop чтобы отменить поиск",
+            reply_markup=markup_user
+        )
+    
+    print(f"🔄 Пользователь {user_id} ищет нового собеседника, партнёр {partner_id} ожидает решения")
 
 # Команда /stop - остановить диалог
 @bot.message_handler(commands=['stop'])
@@ -220,3 +270,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"🌐 Flask запущен на порту {port}")
     app.run(host="0.0.0.0", port=port)
+
