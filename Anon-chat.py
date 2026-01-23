@@ -29,13 +29,28 @@ def send_match_message(user_id):
         "@OnonChatTg_Bot"
     )
     
-    bot.send_message(
-        user_id,
-        message_text,
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
-
+    try:
+        bot.send_message(
+            user_id,
+            message_text,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        # Если Markdown не работает, отправим без форматирования
+        plain_text = (
+            "✅ Собеседник найден! Начинайте общение.\n\n"
+            "📋 Доступные команды:\n"
+            "/next — следующий собеседник\n"
+            "/stop — остановить поиск и завершить диалог\n\n"
+            "📢 Хочешь найти новых друзей? Приглашай друзей в бота:\n"
+            "@OnonChatTg_Bot"
+        )
+        bot.send_message(
+            user_id,
+            plain_text,
+            reply_markup=markup
+        )
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -184,6 +199,7 @@ if __name__ == "__main__":
     print("🤖 Бот запущен...")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
