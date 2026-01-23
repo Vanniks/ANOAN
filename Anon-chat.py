@@ -85,12 +85,13 @@ def start(message):
         
         bot.send_message(
             partner_id,
-            "⚠️ Собеседник перезапустил бота.\n\n"
+            "⚠️ *Собеседник перезапустил бота.*\n\n"
             "Нажми кнопку ниже, чтобы найти нового собеседника:",
-            reply_markup=markup
+            reply_markup=markup,
+            parse_mode="Markdown"
         )
     
-    # Показываем инлайн-кнопку
+    # Показываем инлайн-кнопку (ВАЖНО: только инлайн!)
     markup = types.InlineKeyboardMarkup()
     btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
     markup.add(btn_search)
@@ -98,11 +99,21 @@ def start(message):
     bot.send_message(
         user_id,
         "👋 *Привет! Я бот для анонимного общения.*\n\n"
-        "Нажми кнопку ниже, чтобы найти собеседника:",
+        "📌 *Как пользоваться:*\n"
+        "1. Нажми кнопку ниже 👇\n"
+        "2. Жди соединения с собеседником\n"
+        "3. Общайся анонимно\n"
+        "4. Используй /next для нового собеседника\n\n"
+        "📢 *Приглашай друзей:* @OnonChatTg_Bot",
         reply_markup=markup,
         parse_mode="Markdown"
     )
-
+    
+    # Удаляем сообщение с текстом "🔍 Начать поиск" если оно есть
+    try:
+        bot.delete_message(user_id, message.message_id)
+    except:
+        pass
 # Обработчик инлайн-кнопок
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -329,6 +340,22 @@ def stop_chat(message):
 def forward_message(message):
     user_id = message.chat.id
     
+    # Если пользователь написал "🔍 Начать поиск" или "Начать поиск"
+    if message.text and (message.text == '🔍 Начать поиск' or message.text == 'Начать поиск'):
+        # Показываем инлайн-кнопку вместо старой логики
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            user_id,
+            "ℹ️ *Пожалуйста, используй кнопку ниже для поиска:*\n\n"
+            "Нажми на кнопку 👇 чтобы начать поиск собеседника:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        return
+    
     # Если пользователь в активной паре - пересылаем сообщение
     if user_id in active_pairs:
         partner_id = active_pairs[user_id]
@@ -374,7 +401,6 @@ def forward_message(message):
             reply_markup=markup,
             parse_mode="Markdown"
         )
-
 # Запуск бота
 if __name__ == "__main__":
     print("🤖 Бот запущен и готов к работе...")
@@ -384,3 +410,4 @@ if __name__ == "__main__":
         bot.polling(none_stop=True, interval=1, timeout=30)
     except Exception as e:
         print(f"❌ Критическая ошибка: {e}")
+
