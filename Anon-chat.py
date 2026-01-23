@@ -13,6 +13,8 @@ active_pairs = {}
 # Функция отправки сообщения о найденном собеседнике
 def send_match_message(user_id):
     try:
+        print(f"🚀 Начинаем отправку сообщения пользователю {user_id}")
+        
         markup = types.InlineKeyboardMarkup(row_width=2)
         btn_next = types.InlineKeyboardButton('🔄 Следующий', callback_data='next_chat')
         btn_stop = types.InlineKeyboardButton('⛔ Стоп', callback_data='stop_chat')
@@ -27,15 +29,53 @@ def send_match_message(user_id):
             "@OnonChatTg_Bot"
         )
         
-        bot.send_message(
+        print(f"📝 Текст сообщения: {message_text[:50]}...")
+        print(f"🎛️ Клавиатура создана")
+        
+        # Отправляем сообщение
+        sent_message = bot.send_message(
             user_id,
             message_text,
             reply_markup=markup,
             parse_mode="Markdown"
         )
-        print(f"📨 Сообщение отправлено пользователю {user_id}")
+        
+        print(f"✅ Сообщение отправлено пользователю {user_id}, message_id: {sent_message.message_id}")
+        return True
+        
     except Exception as e:
-        print(f"❌ Ошибка отправки сообщения: {e}")
+        print(f"❌ Ошибка отправки сообщения пользователю {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Попробуем отправить без форматирования
+        try:
+            plain_text = (
+                "✅ Собеседник найден! Начинайте общение.\n\n"
+                "📋 Доступные команды:\n"
+                "/next — следующий собеседник\n"
+                "/stop — остановить диалог\n\n"
+                "📢 Приглашай друзей в бота:\n"
+                "@OnonChatTg_Bot"
+            )
+            
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            btn_next = types.InlineKeyboardButton('🔄 Следующий', callback_data='next_chat')
+            btn_stop = types.InlineKeyboardButton('⛔ Стоп', callback_data='stop_chat')
+            markup.add(btn_next, btn_stop)
+            
+            sent_message = bot.send_message(
+                user_id,
+                plain_text,
+                reply_markup=markup
+            )
+            
+            print(f"✅ Сообщение отправлено без форматирования пользователю {user_id}")
+            return True
+            
+        except Exception as e2:
+            print(f"❌ Критическая ошибка при отправке: {e2}")
+            return False
 
 # Функция для соединения пользователей
 def connect_users():
@@ -45,19 +85,30 @@ def connect_users():
                 user1 = search_queue.pop(0)
                 user2 = search_queue.pop(0)
                 
+                print(f"🔍 Найдена пара: {user1} и {user2}")
+                print(f"📊 До соединения: active_pairs = {active_pairs}")
+                
                 # Проверяем, что пользователи ещё не в паре
                 if user1 not in active_pairs and user2 not in active_pairs:
                     # Соединяем их
                     active_pairs[user1] = user2
                     active_pairs[user2] = user1
                     
-                    print(f"🔗 Соединены: {user1} и {user2}")
+                    print(f"✅ Соединены: {user1} ↔ {user2}")
+                    print(f"📊 После соединения: active_pairs = {active_pairs}")
                     
                     # Отправляем сообщение о найденном собеседнике
+                    print(f"📨 Отправляем сообщение пользователю {user1}")
                     send_match_message(user1)
+                    
+                    print(f"📨 Отправляем сообщение пользователю {user2}")
                     send_match_message(user2)
+                else:
+                    print(f"⚠️ Один из пользователей уже в паре: {user1} в active_pairs: {user1 in active_pairs}, {user2} в active_pairs: {user2 in active_pairs}")
         except Exception as e:
             print(f"❌ Ошибка в connect_users: {e}")
+            import traceback
+            traceback.print_exc()
         
         time.sleep(1)
 
@@ -410,4 +461,5 @@ if __name__ == "__main__":
         bot.polling(none_stop=True, interval=1, timeout=30)
     except Exception as e:
         print(f"❌ Критическая ошибка: {e}")
+
 
