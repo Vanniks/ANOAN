@@ -3,7 +3,7 @@ import os
 from telebot import types
 
 TOKEN = os.environ.get("8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE")
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE)
 
 # Хранилище для очереди поиска и текущих пар
 search_queue = []
@@ -165,5 +165,6 @@ def forward_message(message):
 if __name__ == "__main__":
     print("Бот запущен...")
     bot.polling(none_stop=True)
+
 
 
