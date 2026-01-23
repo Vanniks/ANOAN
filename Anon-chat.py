@@ -1,13 +1,40 @@
-import telebot
 import os
+import telebot
+from flask import Flask, request
 from telebot import types
 
+# Токен бота
 TOKEN = "8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE"
 bot = telebot.TeleBot(TOKEN)
+
+app = Flask(__name__)
 
 # Хранилище для очереди поиска и текущих пар
 search_queue = []
 active_pairs = {}
+
+# Функция отправки сообщения о найденном собеседнике
+def send_match_message(user_id):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_next = types.KeyboardButton('/next')
+    btn_stop = types.KeyboardButton('/stop')
+    markup.add(btn_next, btn_stop)
+    
+    message_text = (
+        "✅ *Собеседник найден! Начинайте общение.*\n\n"
+        "📋 *Доступные команды:*\n"
+        "*/next* — следующий собеседник\n"
+        "*/stop* — остановить поиск и завершить диалог\n\n"
+        "📢 *Хочешь найти новых друзей? Приглашай друзей в бота:*\n"
+        "@OnonChatTg_Bot"
+    )
+    
+    bot.send_message(
+        user_id,
+        message_text,
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -49,32 +76,9 @@ def search(message):
         active_pairs[user1] = user2
         active_pairs[user2] = user1
         
-        # Отправляем сообщение о найденном собеседнике
+        # Отправляем сообщение о найденном собеседнике (ТО САМОЕ СООБЩЕНИЕ!)
         send_match_message(user1)
         send_match_message(user2)
-
-# Функция отправки сообщения о найденном собеседнике
-def send_match_message(user_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_next = types.KeyboardButton('/next')
-    btn_stop = types.KeyboardButton('/stop')
-    markup.add(btn_next, btn_stop)
-    
-    message_text = (
-        "✅ *Собеседник найден! Начинайте общение.*\n\n"
-        "📋 *Доступные команды:*\n"
-        "*/next* — следующий собеседник\n"
-        "*/stop* — остановить поиск и завершить диалог\n\n"
-        "📢 *Хочешь найти новых друзей? Приглашай друзей в бота:*\n"
-        "@OnonChatTg_Bot"
-    )
-    
-    bot.send_message(
-        user_id,
-        message_text,
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
 
 # Команда /next - найти нового собеседника
 @bot.message_handler(commands=['next'])
@@ -161,10 +165,25 @@ def forward_message(message):
     elif user_id not in search_queue:
         bot.send_message(user_id, "❌ У тебя нет собеседника. Нажми '🔍 Начать поиск' или используй /start")
 
-# Запуск бота
+# Flask маршруты
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    return 'Bad request', 400
+
+# Запуск
 if __name__ == "__main__":
-    print("Бот запущен...")
-    bot.polling(none_stop=True)
+    print("🤖 Бот запущен...")
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 
 
