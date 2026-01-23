@@ -1,41 +1,37 @@
 import os
 import telebot
-from flask import Flask, request
 from telebot import types
 import threading
 import time
 
-# Токен бота
 TOKEN = "8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE"
 bot = telebot.TeleBot(TOKEN)
 
-app = Flask(__name__)
-
-# Хранилище для очереди поиска и текущих пар
 search_queue = []
 active_pairs = {}
 
 # Функция отправки сообщения о найденном собеседнике
 def send_match_message(user_id):
     try:
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-        btn_next = types.KeyboardButton('/next')
-        btn_stop = types.KeyboardButton('/stop')
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        btn_next = types.InlineKeyboardButton('🔄 Следующий', callback_data='next_chat')
+        btn_stop = types.InlineKeyboardButton('⛔ Стоп', callback_data='stop_chat')
         markup.add(btn_next, btn_stop)
         
         message_text = (
-            "✅ Собеседник найден! Начинайте общение.\n\n"
-            "📋 Доступные команды:\n"
-            "/next — следующий собеседник\n"
-            "/stop — остановить поиск и завершить диалог\n\n"
-            "📢 Хочешь найти новых друзей? Приглашай друзей в бота:\n"
+            "✅ *Собеседник найден! Начинайте общение.*\n\n"
+            "📋 *Доступные команды:*\n"
+            "🔄 */next* — следующий собеседник\n"
+            "⛔ */stop* — остановить диалог\n\n"
+            "📢 *Приглашай друзей в бота:*\n"
             "@OnonChatTg_Bot"
         )
         
         bot.send_message(
             user_id,
             message_text,
-            reply_markup=markup
+            reply_markup=markup,
+            parse_mode="Markdown"
         )
         print(f"📨 Сообщение отправлено пользователю {user_id}")
     except Exception as e:
@@ -63,7 +59,7 @@ def connect_users():
         except Exception as e:
             print(f"❌ Ошибка в connect_users: {e}")
         
-        time.sleep(1)  # Пауза между проверками
+        time.sleep(1)
 
 # Запускаем поток для соединения пользователей
 connect_thread = threading.Thread(target=connect_users, daemon=True)
@@ -104,6 +100,186 @@ def start(message):
         "👋 *Привет! Я бот для анонимного общения.*\n\n"
         "Нажми кнопку ниже, чтобы найти собеседника:",
         reply_markup=markup,
+        parse_mode="Markdown"
+    )
+
+# Обработчик инлайн-кнопок
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    user_id = call.message.chat.id
+    
+    if call.data == 'start_search':
+        # Удаляем старые сообщения с кнопками
+        try:
+            bot.delete_message(user_id, call.message.message_id)
+        except:
+            pass
+        
+        # Запускаем поиск
+        if user_id in active_pairs:
+            bot.answer_callback_query(call.id, "❌ У тебя уже есть собеседник!")
+            return
+        
+        if user_id in search_queue:
+            bot.answer_callback_query(call.id, "🔍 Ты уже в очереди поиска...")
+            return
+        
+        # Добавляем в очередь
+        search_queue.append(user_id)
+        bot.send_message(user_id, "🔍 Ищем собеседника...")
+        bot.answer_callback_query(call.id, "✅ Начинаем поиск...")
+        
+    elif call.data == 'stop_search':
+        # Удаляем из поиска
+        if user_id in search_queue:
+            search_queue.remove(user_id)
+        
+        # Показываем кнопку поиска
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            user_id,
+            "✅ Поиск остановлен.\n\n"
+            "Нажми кнопку ниже, чтобы начать поиск заново:",
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id, "✅ Поиск остановлен")
+        
+    elif call.data == 'next_chat':
+        # Команда "Следующий" из инлайн-кнопки
+        if user_id not in active_pairs:
+            bot.answer_callback_query(call.id, "❌ У тебя нет собеседника!")
+            return
+        
+        partner_id = active_pairs[user_id]
+        
+        # Уведомляем партнёра
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            partner_id,
+            "⚠️ *Твой собеседник покинул диалог.*\n\n"
+            "Нажми кнопку ниже, чтобы найти нового собеседника:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        
+        # Удаляем пару
+        del active_pairs[user_id]
+        del active_pairs[partner_id]
+        
+        # Только инициатор идёт в поиск
+        search_queue.append(user_id)
+        
+        # Уведомляем инициатора
+        markup_user = types.InlineKeyboardMarkup()
+        btn_stop = types.InlineKeyboardButton('⛔ Остановить поиск', callback_data='stop_search')
+        markup_user.add(btn_stop)
+        
+        bot.send_message(
+            user_id,
+            "🔄 *Ищем нового собеседника...*\n\n"
+            "Нажми кнопку ниже, чтобы остановить поиск:",
+            reply_markup=markup_user,
+            parse_mode="Markdown"
+        )
+        bot.answer_callback_query(call.id, "🔄 Ищем нового собеседника...")
+        
+    elif call.data == 'stop_chat':
+        # Команда "Стоп" из инлайн-кнопки
+        if user_id in active_pairs:
+            partner_id = active_pairs[user_id]
+            
+            # Уведомляем партнёра
+            markup = types.InlineKeyboardMarkup()
+            btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+            markup.add(btn_search)
+            
+            bot.send_message(
+                partner_id,
+                "❌ *Собеседник завершил диалог.*\n\n"
+                "Нажми кнопку ниже, чтобы найти нового собеседника:",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            
+            del active_pairs[user_id]
+            del active_pairs[partner_id]
+        
+        # Удаляем из поиска
+        if user_id in search_queue:
+            search_queue.remove(user_id)
+        
+        # Показываем кнопку поиска
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            user_id,
+            "✅ *Диалог завершён.*\n\n"
+            "Нажми кнопку ниже, чтобы найти нового собеседника:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        bot.answer_callback_query(call.id, "✅ Диалог завершён")
+
+# Команда /next - найти нового собеседника
+@bot.message_handler(commands=['next'])
+def next_chat(message):
+    user_id = message.chat.id
+    
+    if user_id not in active_pairs:
+        # Показываем инлайн-кнопку
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            user_id,
+            "❌ *У тебя нет активного собеседника.*\n\n"
+            "Нажми кнопку ниже, чтобы найти собеседника:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        return
+    
+    partner_id = active_pairs[user_id]
+    
+    # Уведомляем партнёра
+    markup_partner = types.InlineKeyboardMarkup()
+    btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+    markup_partner.add(btn_search)
+    
+    bot.send_message(
+        partner_id,
+        "⚠️ *Твой собеседник покинул диалог.*\n\n"
+        "Нажми кнопку ниже, чтобы найти нового собеседника:",
+        reply_markup=markup_partner,
+        parse_mode="Markdown"
+    )
+    
+    # Удаляем пару
+    del active_pairs[user_id]
+    del active_pairs[partner_id]
+    
+    # Только инициатор идёт в поиск
+    search_queue.append(user_id)
+    
+    # Уведомляем инициатора
+    markup_user = types.InlineKeyboardMarkup()
+    btn_stop = types.InlineKeyboardButton('⛔ Остановить поиск', callback_data='stop_search')
+    markup_user.add(btn_stop)
+    
+    bot.send_message(
+        user_id,
+        "🔄 *Ищем нового собеседника...*\n\n"
+        "Нажми кнопку ниже, чтобы остановить поиск:",
+        reply_markup=markup_user,
         parse_mode="Markdown"
     )
 
@@ -153,6 +329,7 @@ def stop_chat(message):
 def forward_message(message):
     user_id = message.chat.id
     
+    # Если пользователь в активной паре - пересылаем сообщение
     if user_id in active_pairs:
         partner_id = active_pairs[user_id]
         
@@ -168,44 +345,42 @@ def forward_message(message):
         # Пересылаем стикеры и другие типы
         else:
             bot.send_message(partner_id, "📎 [Сообщение недоступно для предпросмотра]")
-    elif user_id not in search_queue:
-        bot.send_message(user_id, "❌ У тебя нет собеседника. Нажми '🔍 Начать поиск' или используй /start")
-
-# Flask маршруты
-@app.route('/')
-def home():
-    return f"Bot is running! Users in queue: {len(search_queue)}, Active pairs: {len(active_pairs)//2}"
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    return 'Bad request', 400
-
-# Запуск бота в отдельном потоке
-def run_bot():
-    print("🤖 Бот запущен и готов к работе...")
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=1, timeout=30)
-        except Exception as e:
-            print(f"⚠️ Ошибка polling: {e}")
-            time.sleep(5)
-
-# Запуск
-if __name__ == "__main__":
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
     
-    # Запускаем Flask
-    port = int(os.environ.get("PORT", 5000))
-    print(f"🌐 Flask запущен на порту {port}")
-    app.run(host="0.0.0.0", port=port)
+    # Если пользователь в поиске - уведомляем его
+    elif user_id in search_queue:
+        markup = types.InlineKeyboardMarkup()
+        btn_stop = types.InlineKeyboardButton('⛔ Остановить поиск', callback_data='stop_search')
+        markup.add(btn_stop)
+        
+        bot.send_message(
+            user_id,
+            "⏳ *Ты всё ещё в поиске собеседника...*\n"
+            "Ожидайте соединения.\n\n"
+            "Нажми кнопку ниже, чтобы остановить поиск:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    
+    # Если пользователь не в поиске и не в паре - предлагаем начать поиск
+    else:
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            user_id,
+            "❌ *У тебя нет собеседника.*\n\n"
+            "Нажми кнопку ниже, чтобы начать поиск:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
 
-
-
-
+# Запуск бота
+if __name__ == "__main__":
+    print("🤖 Бот запущен и готов к работе...")
+    print("📊 Статистика: поиск каждую секунду")
+    
+    try:
+        bot.polling(none_stop=True, interval=1, timeout=30)
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
