@@ -114,7 +114,19 @@ def stop_chat(message):
     
     if user_id in active_pairs:
         partner_id = active_pairs[user_id]
-        bot.send_message(partner_id, "❌ Собеседник завершил диалог.")
+        
+        # Показываем партнёру инлайн-кнопку
+        markup = types.InlineKeyboardMarkup()
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
+        markup.add(btn_search)
+        
+        bot.send_message(
+            partner_id,
+            "❌ *Собеседник завершил диалог.*\n\n"
+            "Нажми кнопку ниже, чтобы найти нового собеседника:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
         
         del active_pairs[user_id]
         del active_pairs[partner_id]
@@ -123,14 +135,17 @@ def stop_chat(message):
     if user_id in search_queue:
         search_queue.remove(user_id)
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_search = types.KeyboardButton('🔍 Начать поиск')
+    # Показываем инлайн-кнопку
+    markup = types.InlineKeyboardMarkup()
+    btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='start_search')
     markup.add(btn_search)
     
     bot.send_message(
         user_id,
-        "✅ Диалог завершён. Используй кнопку ниже для нового поиска.",
-        reply_markup=markup
+        "✅ *Диалог завершён.*\n\n"
+        "Нажми кнопку ниже, чтобы найти нового собеседника:",
+        reply_markup=markup,
+        parse_mode="Markdown"
     )
 
 # Пересылка сообщений между собеседниками
@@ -190,6 +205,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"🌐 Flask запущен на порту {port}")
     app.run(host="0.0.0.0", port=port)
+
 
 
 
