@@ -587,7 +587,7 @@ def show_shop(call):
         logger.error(f"Ошибка показа магазина: {e}")
         bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
-# ======== ПОКУПКА ЗВЁЗД ЧЕРЕЗ TELEGRAM STARS API ========
+# ======== РЕАЛЬНАЯ ПОКУПКА ЗВЁЗД ЧЕРЕЗ TELEGRAM STARS ========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('stars_buy_'))
 def handle_stars_purchase(call):
     user_id = call.message.chat.id
@@ -599,73 +599,83 @@ def handle_stars_purchase(call):
     label = price_info['label']
     
     try:
-        # Создаем инвойс для Telegram Stars
+        # СОЗДАЕМ РЕАЛЬНЫЙ ИНВОЙС ДЛЯ TELEGRAM STARS
+        # Для Telegram Stars оставляем provider_token пустым
         prices = [types.LabeledPrice(label=label, amount=price_info['price'])]
         
-        # Для Telegram Stars нужно использовать специальный провайдер
-        # Временно используем тестовый метод с ссылкой
-        bot.answer_callback_query(call.id, f"💫 Подготовка покупки {stars_amount} звёзд...")
-        
-        # Создаем сообщение с кнопкой для оплаты
-        markup = types.InlineKeyboardMarkup()
-        # В реальном боте здесь должна быть ссылка на оплату через Stars
-        # Временно используем эмуляцию
-        btn_pay = types.InlineKeyboardButton(
-            f"💳 Оплатить {price_rub}₽", 
-            callback_data=f'confirm_pay_{stars_amount}'
+        # Отправляем инвойс
+        bot.send_invoice(
+            chat_id=user_id,
+            title=f"Покупка {stars_amount} звёзд",
+            description=f"Пополнение баланса на {stars_amount} звёзд для анонимного чата",
+            invoice_payload=f"stars_{user_id}_{stars_amount}",
+            provider_token="",  # Для Telegram Stars оставляем пустым
+            currency="XTR",     # Код валюты для Telegram Stars
+            prices=prices,
+            start_parameter=f"stars_{stars_amount}",
+            need_name=False,
+            need_phone_number=False,
+            need_email=False,
+            need_shipping_address=False,
+            is_flexible=False
         )
-        btn_cancel = types.InlineKeyboardButton('❌ Отмена', callback_data='shop')
-        markup.add(btn_pay, btn_cancel)
         
-        bot.send_message(
-            user_id,
-            f"💫 *Покупка {stars_amount} звёзд*\n\n"
-            f"💰 *Стоимость:* {price_rub}₽\n"
-            f"⭐ *Вы получите:* {stars_amount} звёзд\n\n"
-            f"💳 *Для оплаты нажмите кнопку ниже*\n"
-            f"(В демо-режиме звёзды начисляются автоматически)",
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
+        bot.answer_callback_query(call.id, "💫 Открывается окно оплаты...")
         
     except Exception as e:
-        logger.error(f"Ошибка создания платежа: {e}")
+        logger.error(f"Ошибка создания инвойса: {e}")
         bot.answer_callback_query(call.id, "❌ Ошибка, попробуйте позже", show_alert=True)
 
-# Обработчик подтверждения оплаты (демо-режим)
-@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_pay_'))
-def handle_confirm_payment(call):
-    user_id = call.message.chat.id
-    stars_amount = int(call.data.replace('confirm_pay_', ''))
-    
-    # В демо-режиме просто начисляем звёзды
-    price_info = STAR_PACKAGES.get(stars_amount, STAR_PACKAGES[100])
-    price_rub = price_info['rub_price']
-    
-    # Начисляем звёзды
-    add_stars(user_id, stars_amount, is_real=True)
-    
-    # Удаляем сообщение с кнопкой оплаты
+# ======== ОБРАБОТКА ПРЕДВАРИТЕЛЬНОГО ЗАПРОСА ========
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def process_pre_checkout(pre_checkout_query):
     try:
-        bot.delete_message(user_id, call.message.message_id)
-    except:
-        pass
+        # Всегда подтверждаем запрос
+        bot.answer_pre_checkout_query(
+            pre_checkout_query.id, 
+            ok=True,
+            error_message="Произошла ошибка при обработке платежа"
+        )
+        logger.info(f"Pre-checkout approved for {pre_checkout_query.from_user.id}")
+    except Exception as e:
+        logger.error(f"Ошибка pre-checkout: {e}")
+        bot.answer_pre_checkout_query(pre_checkout_query.id, ok=False)
+
+# ======== ОБРАБОТКА УСПЕШНОЙ ОПЛАТЫ ========
+@bot.message_handler(content_types=['successful_payment'])
+def handle_successful_payment(message):
+    user_id = message.chat.id
+    payment_info = message.successful_payment
     
-    # Показываем успешное сообщение
-    bot.send_message(
-        user_id,
-        f"✅ *Оплата успешно завершена!*\n\n"
-        f"💰 *Сумма:* {price_rub}₽\n"
-        f"⭐ *Начислено:* {stars_amount} звёзд\n"
-        f"💫 *Текущий баланс:* {get_user_stars(user_id)} звёзд\n\n"
-        f"✨ Спасибо за поддержку проекта!\n"
-        f"💎 70% от суммы поступит разработчику.\n\n"
-        f"🛒 Можете продолжить покупки в магазине!",
-        parse_mode="Markdown"
-    )
-    
-    # Возвращаем в магазин
-    show_shop(call)
+    try:
+        payload = payment_info.invoice_payload
+        logger.info(f"Получен платёж: {payment_info.total_amount / 100}₽ от {user_id}, payload: {payload}")
+        
+        # Извлекаем количество звёзд из payload
+        if payload.startswith('stars_'):
+            parts = payload.split('_')
+            if len(parts) >= 3:
+                stars_amount = int(parts[2])
+                
+                # Добавляем звёзды пользователю
+                add_stars(user_id, stars_amount, is_real=True)
+                
+                # Уведомляем пользователя
+                bot.send_message(
+                    user_id,
+                    f"✅ *Оплата успешна!*\n\n"
+                    f"💫 Вам начислено: *{stars_amount} звёзд*\n"
+                    f"⭐️ Текущий баланс: *{get_user_stars(user_id)} звёзд*\n\n"
+                    f"✨ Спасибо за поддержку проекта!\n"
+                    f"💰 70% от суммы поступит разработчику.",
+                    parse_mode="Markdown"
+                )
+                
+                logger.info(f"Начислено {stars_amount} звёзд пользователю {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки платежа: {e}")
+        bot.send_message(user_id, "⚠️ Произошла ошибка при обработке платежа. Обратитесь в поддержку.")
 
 # ======== ПОКУПКА ПРЕМИУМА И ФУНКЦИЙ ========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('premium_'))
@@ -793,9 +803,357 @@ def buy_unlimited(call):
                 show_alert=True
             )
     else:
-        # ДОБАВЬТЕ ЭТОТ КОД:
         bot.answer_callback_query(
             call.id,
             f"❌ Недостаточно звёзд!\nНужно: {cost}⭐\nУ вас: {stars}⭐",
             show_alert=True
         )
+
+# ======== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ========
+@bot.callback_query_handler(func=lambda call: call.data == 'profile')
+def show_profile(call):
+    user_id = call.message.chat.id
+    profile = get_user_profile(user_id)
+    
+    premium_text = "❌ Нет"
+    if profile.get('premium_until'):
+        try:
+            premium_until = datetime.fromisoformat(profile['premium_until'])
+            if premium_until > datetime.now():
+                premium_text = f"✅ До {premium_until.strftime('%d.%m.%Y')}"
+        except:
+            pass
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_name = types.InlineKeyboardButton('✏️ Имя', callback_data='set_name')
+    btn_gender = types.InlineKeyboardButton('🚻 Пол', callback_data='set_gender')
+    btn_age = types.InlineKeyboardButton('🎂 Возраст', callback_data='set_age')
+    btn_stars = types.InlineKeyboardButton(f'⭐ {profile.get("stars", 0)} звёзд', callback_data='stars_info')
+    btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='back')
+    markup.add(btn_name, btn_gender, btn_age, btn_stars, btn_back)
+    
+    message = (
+        f"👤 *Ваш профиль*\n\n"
+        f"📛 *Имя:* {profile.get('name', 'Аноним')}\n"
+        f"🚻 *Пол:* {profile.get('gender', 'Не указан')}\n"
+        f"🎂 *Возраст:* {profile.get('age', 'Не указан')}\n"
+        f"⭐ *Звёзды:* {profile.get('stars', 0)}\n"
+        f"💰 *Всего потрачено:* {profile.get('total_spent', 0)}⭐\n"
+        f"💎 *Премиум:* {premium_text}\n"
+        f"🔍 *Поисков:* {profile.get('search_count', 0)}\n\n"
+        f"⚙️ *Настройки:*"
+      )
+    
+    try:
+        bot.edit_message_text(
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка показа профиля: {e}")
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
+
+# ======== ОБРАБОТЧИК ВЫБОРА ПОЛА ========
+@bot.callback_query_handler(func=lambda call: call.data == 'set_gender')
+def set_gender_handler(call):
+    user_id = call.message.chat.id
+    
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    btn_male = types.InlineKeyboardButton('👨 Мужской', callback_data='save_gender_male')
+    btn_female = types.InlineKeyboardButton('👩 Женский', callback_data='save_gender_female')
+    btn_other = types.InlineKeyboardButton('⚧️ Другой', callback_data='save_gender_other')
+    btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='profile')
+    markup.add(btn_male, btn_female, btn_other, btn_back)
+    
+    try:
+        bot.edit_message_text(
+            "🚻 *Выберите ваш пол:*",
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка выбора пола: {e}")
+        bot.send_message(user_id, "🚻 *Выберите ваш пол:*", reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('save_gender_'))
+def save_gender(call):
+    user_id = call.message.chat.id
+    gender = call.data.replace('save_gender_', '')
+    
+    gender_text = {'male': 'Мужской', 'female': 'Женский', 'other': 'Другой'}
+    
+    if gender in gender_text:
+        update_profile_field(user_id, 'gender', gender_text[gender])
+        bot.answer_callback_query(call.id, f"✅ Пол сохранен: {gender_text[gender]}")
+        show_profile(call)
+    else:
+        bot.answer_callback_query(call.id, "❌ Ошибка выбора пола")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_age')
+def set_age_handler(call):
+    user_id = call.message.chat.id
+    user_states[user_id] = {'awaiting': 'age'}
+    
+    try:
+        bot.edit_message_text(
+            "🎂 *Введите ваш возраст (число от 13 до 99):*",
+            user_id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка установки возраста: {e}")
+        bot.send_message(user_id, "🎂 *Введите ваш возраст (число от 13 до 99):*", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_name')
+def set_name_handler(call):
+    user_id = call.message.chat.id
+    user_states[user_id] = {'awaiting': 'name'}
+    
+    try:
+        bot.edit_message_text(
+            "✏️ *Введите ваше имя (максимум 20 символов):*",
+            user_id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка установки имени: {e}")
+        bot.send_message(user_id, "✏️ *Введите ваше имя (максимум 20 символов):*", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'stars_info')
+def show_stars_info(call):
+    user_id = call.message.chat.id
+    profile = get_user_profile(user_id)
+    
+    markup = types.InlineKeyboardMarkup()
+    btn_shop = types.InlineKeyboardButton('🛒 Магазин', callback_data='shop')
+    btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='profile')
+    markup.add(btn_shop, btn_back)
+    
+    message = (
+        f"⭐️ *Информация о звёздах*\n\n"
+        f"💫 *Текущий баланс:* {profile.get('stars', 0)}⭐\n"
+        f"💰 *Куплено:* {profile.get('real_stars', 0)}⭐\n"
+        f"💸 *Потрачено всего:* {profile.get('total_spent', 0)}⭐\n"
+        f"💎 *Заработано разработчиком:* ~{profile.get('total_earned', 0):.2f}₽\n\n"
+        f"✨ *Курс:* 100⭐ = 130₽\n"
+        f"💳 *Разработчик получает:* 70% от суммы\n\n"
+        f"🚀 Спасибо за поддержку проекта!"
+    )
+    
+    try:
+        bot.edit_message_text(
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка показа информации о звёздах: {e}")
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda msg: msg.chat.id in user_states)
+def handle_profile_input(message):
+    user_id = message.chat.id
+    state = user_states.get(user_id, {})
+    
+    if 'awaiting' in state:
+        if state['awaiting'] == 'age':
+            try:
+                age = int(message.text)
+                if 13 <= age <= 99:
+                    update_profile_field(user_id, 'age', age)
+                    bot.send_message(user_id, f"✅ Возраст сохранен: {age} лет")
+                    del user_states[user_id]
+                else:
+                    bot.send_message(user_id, "❌ Возраст должен быть от 13 до 99 лет")
+            except:
+                bot.send_message(user_id, "❌ Введите корректное число")
+                
+        elif state['awaiting'] == 'name':
+            name = message.text.strip()
+            if 1 <= len(name) <= 20:
+                update_profile_field(user_id, 'name', name)
+                bot.send_message(user_id, f"✅ Имя сохранено: {name}")
+                del user_states[user_id]
+            else:
+                bot.send_message(user_id, "❌ Имя должно быть от 1 до 20 символов")
+
+# ======== ОБРАБОТКА СООБЩЕНИЙ ========
+@bot.message_handler(func=lambda msg: True)
+def handle_messages(message):
+    user_id = message.chat.id
+    
+    if user_id in active_pairs:
+        partner_id = active_pairs[user_id]
+        try:
+            bot.send_message(partner_id, message.text)
+        except:
+            print(f"❌ Ошибка пересылки")
+    
+    elif any(u['user_id'] == user_id for u in search_queue):
+        position = next(i for i, u in enumerate(search_queue) if u['user_id'] == user_id) + 1
+        bot.send_message(user_id, f"⏳ *Ты всё ещё в поиске...*\n\n📊 *Позиция в очереди:* {position}")
+    else:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='search_menu')
+        btn_profile = types.InlineKeyboardButton('👤 Профиль', callback_data='profile')
+        btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
+        markup.add(btn_search, btn_profile, btn_help)
+        
+        bot.send_message(
+            user_id,
+            "🤔 *Кажется, ты не в диалоге...*\nХочешь найти собеседника?",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+
+# ======== ОБРАБОТКА КНОПОК ========
+@bot.callback_query_handler(func=lambda call: call.data in ['cancel', 'next', 'stop', 'back', 'help', 'stats'])
+def handle_basic_buttons(call):
+    user_id = call.message.chat.id
+    command = call.data
+    
+    try:
+        bot.delete_message(user_id, call.message.message_id)
+    except:
+        pass
+    
+    if command == 'cancel':
+        cleanup_user(user_id)
+        start(call.message)
+        
+    elif command == 'next':
+        if user_id not in active_pairs:
+            bot.send_message(user_id, "❌ У тебя нет активного собеседника.")
+            return
+        
+        partner_id = active_pairs[user_id]
+        cleanup_user(user_id)
+        bot.send_message(partner_id, "⚠️ *Твой собеседник покинул диалог.*")
+        start(call.message)
+        
+    elif command == 'stop':
+        if user_id in active_pairs:
+            partner_id = active_pairs[user_id]
+            cleanup_user(user_id)
+            bot.send_message(partner_id, "❌ *Собеседник завершил диалог.*")
+        
+        cleanup_user(user_id)
+        start(call.message)
+        
+    elif command == 'back':
+        start(call.message)
+        
+    elif command == 'help':
+        bot.send_message(
+            user_id,
+            "❓ *Помощь*\n\n"
+            "✨ *Как пользоваться:*\n"
+            "1. Нажми 'Начать поиск'\n"
+            "2. Выбери категорию\n"
+            "3. Дождись собеседника\n"
+            "4. Общайся анонимно\n\n"
+            "⚡️ *Команды:*\n"
+            "• /start - главное меню\n"
+            "• /next - следующий собеседник\n"
+            "• /stop - завершить диалог\n\n"
+            "💎 *Премиум функции:*\n"
+            "• Поиск по полу\n"
+            "• Приоритет в очереди\n"
+            "• Безлимитный поиск\n\n"
+            "🛒 *Магазин:* /shop",
+            parse_mode="Markdown"
+        )
+        
+    elif command == 'stats':
+        import shelve
+        with shelve.open(PROFILES_DB) as db:
+            total_users = len(db)
+        
+        profile = get_user_profile(user_id)
+        
+        bot.send_message(
+            user_id,
+            f"📊 *Статистика*\n\n"
+            f"👤 *Ваш профиль:*\n"
+            f"• Имя: {profile.get('name')}\n"
+            f"• Поисков: {profile.get('search_count', 0)}\n"
+            f"• Звёзд: {profile.get('stars', 0)}⭐\n"
+            f"• Потрачено: {profile.get('total_spent', 0)}⭐\n\n"
+            f"🌐 *Общая:*\n"
+            f"• Всего пользователей: {total_users}\n"
+            f"• В поиске: {len(search_queue)}\n"
+            f"• Активных пар: {len(active_pairs)//2}\n\n"
+            f"🚀 *Бот работает стабильно!*",
+            parse_mode="Markdown"
+        )
+
+# ======== ЗАПУСК (ИСПРАВЛЕННЫЙ ДЛЯ RENDER) ========
+if __name__ == "__main__":
+    print("="*50)
+    print("🤖 АНОНИМНЫЙ ЧАТ - TELEGRAM STARS")
+    print(f"🕐 Время запуска: {time.strftime('%H:%M:%S')}")
+    print("="*50)
+    
+    # Очистка перед запуском
+    cleanup_before_start()
+    
+    # Запуск фонового поиска
+    search_thread = threading.Thread(target=background_search, daemon=True)
+    search_thread.start()
+    
+    # Запуск авто-пинга
+    ping_thread = threading.Thread(target=keep_alive, daemon=True)
+    ping_thread.start()
+    
+    print("✅ Все системы запущены!")
+    print(f"📊 Статус: В очереди: {len(search_queue)} | Активных пар: {len(active_pairs)//2}")
+    print("="*50)
+    print("💰 Курс: 100 звёзд = 130 рублей")
+    print("💳 Разработчик получает: 70% от суммы")
+    print("="*50)
+    
+    # Запуск бота в отдельном потоке
+    def start_bot():
+        print("🤖 Запускаем polling бота...")
+        while True:
+            try:
+                bot.polling(
+                    none_stop=True,
+                    interval=3,
+                    timeout=30,
+                    skip_pending=True,
+                    allowed_updates=["message", "callback_query"]
+                )
+            except Exception as e:
+                print(f"❌ Ошибка polling: {e}")
+                print("🔄 Перезапуск через 10 секунд...")
+                time.sleep(10)
+    
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    
+    # Flask должен быть последним и в главном потоке (для Render)
+    if app:
+        try:
+            port = int(os.environ.get("PORT", 10000))
+            print(f"🌐 Запуск Flask сервера на порту {port}...")
+            app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            print(f"⚠️ Ошибка Flask: {e}")
+            # Удерживаем основной поток
+            while True:
+                time.sleep(3600)
+    else:
+        print("⚠️ Flask не установлен")
+        # Удерживаем основной поток
+        while True:
+            time.sleep(3600)
