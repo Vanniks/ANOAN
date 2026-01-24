@@ -786,4 +786,6 @@ def show_stars_info(call):
         message,
         user_id,
         call.message.message_id,
-        reply_markup=markup
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
