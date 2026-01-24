@@ -750,22 +750,40 @@ def show_profile(call):
         f"⚙️ *Настройки:*"
     )
     
-    try:
+       try:
         bot.edit_message_text(
-            # ======== ОБРАБОТКА КНОПОК ПРОФИЛЯ ========
-@bot.callback_query_handler(func=lambda call: call.data == 'set_gender')
-def set_gender(call):
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'stars_info')
+def show_stars_info(call):
     user_id = call.message.chat.id
+    profile = get_user_profile(user_id)
     
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    btn_male = types.InlineKeyboardButton('👨 Мужской', callback_data='save_gender_male')
-    btn_female = types.InlineKeyboardButton('👩 Женский', callback_data='save_gender_female')
-    btn_other = types.InlineKeyboardButton('🌈 Другой', callback_data='save_gender_other')
+    markup = types.InlineKeyboardMarkup()
+    btn_shop = types.InlineKeyboardButton('🛒 Магазин', callback_data='shop')
     btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='profile')
-    markup.add(btn_male, btn_female, btn_other, btn_back)
+    markup.add(btn_shop, btn_back)
+    
+    message = (
+        f"⭐️ *Информация о звёздах*\n\n"
+        f"💫 *Текущий баланс:* {profile.get('stars', 0)}⭐\n"
+        f"💰 *Куплено:* {profile.get('real_stars', 0)}⭐\n"
+        f"💸 *Потрачено всего:* {profile.get('total_spent', 0)}⭐\n"
+        f"💎 *Заработано разработчиком:* ~{profile.get('total_earned', 0):.2f}₽\n\n"
+        f"✨ *Курс:* 100⭐ = 130₽\n"
+        f"💳 *Разработчик получает:* 70% от суммы\n\n"
+        f"🚀 Спасибо за поддержку проекта!"
+    )
     
     bot.edit_message_text(
-        "🚻 *Выберите ваш пол:*",
+        message,
         user_id,
         call.message.message_id,
         reply_markup=markup,
@@ -1005,3 +1023,4 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
+
