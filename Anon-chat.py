@@ -4,6 +4,8 @@ from telebot import types
 import time
 import threading
 import requests
+import shelve
+from datetime import datetime, timedelta
 
 TOKEN = "8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE"
 bot = telebot.TeleBot(TOKEN)
@@ -21,109 +23,269 @@ try:
     def health():
         return "OK", 200
         
+    @app.route('/ping')
+    def ping():
+        return "pong", 200
+        
 except ImportError:
     print("⚠️ Flask не установлен")
     app = None
+
+# ======== НАСТРОЙКИ TELEGRAM STARS ========
+# КУРС: 100 звёзд = 130 рублей
+# Разработчик получает 70% от суммы
+
+STAR_PACKAGES = {
+    10: {"price": 1300, "label": "10 звёзд (13₽)"},      # 13 руб
+    50: {"price": 6500, "label": "50 звёзд (65₽)"},      # 65 руб
+    100: {"price": 13000, "label": "100 звёзд (130₽)"},  # 130 руб
+    250: {"price": 32500, "label": "250 звёзд (325₽)"},  # 325 руб
+    500: {"price": 65000, "label": "500 звёзд (650₽)"},  # 650 руб
+}
+
+# Цены в звёздах для функций в боте
+PREMIUM_PRICES = {
+    'week': 50,      # 50 звёзд за неделю премиума
+    'month': 180,    # 180 звёзд за месяц премиума
+}
+
+FEATURE_PRICES = {
+    'gender_search': 30,    # 30 звёзд за поиск по полу (24 часа)
+    'priority': 20,         # 20 звёзд за приоритет в очереди
+    'unlimited': 100,       # 100 звёзд за безлимит на 24 часа
+}
+
+# ======== БАЗА ДАННЫХ ========
+PROFILES_DB = "user_profiles.db"
+CATEGORIES = {
+    "💬 Общий чат": "general",
+    "🎮 Игры": "games",
+    "🎵 Музыка": "music",
+    "🎬 Фильмы": "movies",
+    "📚 Книги": "books",
+    "💪 Спорт": "sport",
+    "💕 Отношения": "relationships",
+    "💼 Работа": "work",
+    "🌍 Путешествия": "travel"
+}
+
+search_queue = []
+active_pairs = {}
+user_states = {}
+
 # ======== АВТО-ПИНГ ДЛЯ RENDER ========
 def keep_alive():
     """Периодически пингует себя чтобы Render не засыпал"""
-    import requests
+    ping_interval = 8 * 60
     while True:
         try:
-            # Пингуем свой же сервис
-            requests.get("https://anoan-zqhd.onrender.com", timeout=10)
-            print("🔄 Self-ping отправлен для поддержания активности")
-        except Exception as e:
-            print(f"⚠️ Ошибка self-ping: {e}")
-        
-        # Ждем 10 минут между пингами (Render спит после 15-20 мин)
-        time.sleep(10 * 60)  # 10 минут
+            requests.get("https://anoan-zqhd.onrender.com/ping", timeout=10)
+            print(f"🔄 Self-ping: {time.strftime('%H:%M:%S')}")
+        except:
+            pass
+        time.sleep(ping_interval)
 
-# Запускаем в отдельном потоке
-ping_thread = threading.Thread(target=keep_alive, daemon=True)
-ping_thread.start()
-# ======== ВАШ ОСНОВНОЙ КОД ========
-search_queue = []
-active_pairs = {}
+# ======== ФУНКЦИИ ДЛЯ БАЗЫ ДАННЫХ ========
+def get_user_profile(user_id):
+    """Получает профиль пользователя"""
+    with shelve.open(PROFILES_DB) as db:
+        if str(user_id) in db:
+            return db[str(user_id)]
+        else:
+            default_profile = {
+                'name': 'Аноним',
+                'gender': 'Не указан',
+                'age': 0,
+                'stars': 0,           # Виртуальные звёзды в боте
+                'real_stars': 0,      # Купленные через Telegram
+                'premium_until': None,
+                'gender_search_until': None,
+                'unlimited_until': None,
+                'search_count': 0,
+                'total_spent': 0,     # Всего потрачено звёзд
+                'total_earned': 0,    # Всего заработано (в руб)
+                'created_at': datetime.now().isoformat()
+            }
+            db[str(user_id)] = default_profile
+            return default_profile
 
-# ======== ВАЖНО: УДАЛЯЕМ СТАРЫЕ UPDATES ПЕРЕД ЗАПУСКОМ ========
+def save_user_profile(user_id, profile_data):
+    """Сохраняет профиль пользователя"""
+    with shelve.open(PROFILES_DB) as db:
+        db[str(user_id)] = profile_data
+
+def update_profile_field(user_id, field, value):
+    """Обновляет поле в профиле"""
+    profile = get_user_profile(user_id)
+    profile[field] = value
+    save_user_profile(user_id, profile)
+
+def get_user_stars(user_id):
+    """Получает баланс звёзд"""
+    profile = get_user_profile(user_id)
+    return profile.get('stars', 0)
+
+def add_stars(user_id, amount, is_real=False):
+    """Добавляет звёзды"""
+    profile = get_user_profile(user_id)
+    profile['stars'] = profile.get('stars', 0) + amount
+    if is_real:
+        profile['real_stars'] = profile.get('real_stars', 0) + amount
+        profile['total_spent'] = profile.get('total_spent', 0) + amount
+        # Рассчитываем примерный заработок в рублях (70% от суммы)
+        earned_rub = (amount * 130 / 100) * 0.7
+        profile['total_earned'] = profile.get('total_earned', 0) + earned_rub
+    save_user_profile(user_id, profile)
+
+def spend_stars(user_id, amount):
+    """Тратит звёзды"""
+    profile = get_user_profile(user_id)
+    if profile.get('stars', 0) >= amount:
+        profile['stars'] -= amount
+        save_user_profile(user_id, profile)
+        return True
+    return False
+
+def is_premium(user_id):
+    """Проверяет премиум статус"""
+    profile = get_user_profile(user_id)
+    if profile.get('premium_until'):
+        try:
+            premium_until = datetime.fromisoformat(profile['premium_until'])
+            return premium_until > datetime.now()
+        except:
+            return False
+    return False
+
+def has_gender_search(user_id):
+    """Проверяет доступен ли поиск по полу"""
+    profile = get_user_profile(user_id)
+    if is_premium(user_id):
+        return True
+    if profile.get('gender_search_until'):
+        try:
+            until = datetime.fromisoformat(profile['gender_search_until'])
+            return until > datetime.now()
+        except:
+            return False
+    return False
+
+def has_unlimited_search(user_id):
+    """Проверяет безлимитный поиск"""
+    profile = get_user_profile(user_id)
+    if profile.get('unlimited_until'):
+        try:
+            until = datetime.fromisoformat(profile['unlimited_until'])
+            return until > datetime.now()
+        except:
+            return False
+    return False
+
+# ======== ОЧИСТКА ПЕРЕД ЗАПУСКОМ ========
 def cleanup_before_start():
-    """Удаляет все pending updates и webhook перед запуском"""
+    """Удаляет старые updates"""
     try:
-        # 1. Удаляем webhook если есть
         webhook_url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook"
         response = requests.get(webhook_url, params={"drop_pending_updates": True})
         print(f"🗑️ Удаление webhook: {response.status_code}")
-        
-        # 2. Получаем последний update_id
-        updates_url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-        response = requests.get(updates_url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('result'):
-                last_update = data['result'][-1]['update_id']
-                # 3. Подтверждаем все updates
-                confirm_url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-                requests.get(confirm_url, params={"offset": last_update + 1})
-                print(f"✅ Подтверждены updates до #{last_update}")
-        
-        # 4. Ждем 2 секунды
         time.sleep(2)
-        
     except Exception as e:
         print(f"⚠️ Ошибка cleanup: {e}")
 
 # ======== ФУНКЦИЯ ФОНОВОГО ПОИСКА ========
 def background_search():
-    """Постоянно ищет пары в фоне"""
+    """Ищет пары в фоне"""
     while True:
         try:
             if len(search_queue) >= 2:
-                user1 = search_queue.pop(0)
-                user2 = search_queue.pop(0)
-                
-                if user1 not in active_pairs and user2 not in active_pairs:
-                    active_pairs[user1] = user2
-                    active_pairs[user2] = user1
-                    
-                    print(f"✅ СОЕДИНЕНО: {user1} ↔️ {user2}")
-                    send_match_notification(user1)
-                    send_match_notification(user2)
+                # Проверяем совместимость
+                for i in range(len(search_queue)):
+                    for j in range(i + 1, len(search_queue)):
+                        user1_data = search_queue[i]
+                        user2_data = search_queue[j]
+                        user1 = user1_data['user_id']
+                        user2 = user2_data['user_id']
+                        
+                        # Проверяем категорию
+                        if user1_data['category'] != user2_data['category']:
+                            continue
+                            
+                        # Проверяем фильтр по полу если есть
+                        if not check_gender_compatibility(user1_data, user2_data):
+                            continue
+                        
+                        # Нашли пару
+                        search_queue.pop(j)
+                        search_queue.pop(i)
+                        active_pairs[user1] = user2
+                        active_pairs[user2] = user1
+                        
+                        print(f"✅ СОЕДИНЕНО: {user1} ↔️ {user2}")
+                        
+                        # Отправляем уведомления
+                        category_name = [k for k, v in CATEGORIES.items() if v == user1_data['category']][0]
+                        notify_match(user1, user2, category_name)
+                        
+                        # Обновляем счётчики
+                        update_profile_field(user1, 'search_count', get_user_profile(user1).get('search_count', 0) + 1)
+                        update_profile_field(user2, 'search_count', get_user_profile(user2).get('search_count', 0) + 1)
+                        
+                        break
+                    break
         except Exception as e:
             print(f"⚠️ Ошибка поиска: {e}")
-        
         time.sleep(1)
 
-def send_match_notification(user_id):
-    """Отправляет уведомление о найденном собеседнике"""
-    try:
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_next = types.InlineKeyboardButton('🔄 Следующий', callback_data='next')
-        btn_stop = types.InlineKeyboardButton('⛔️ Стоп', callback_data='stop')
-        btn_profile = types.InlineKeyboardButton('👤 Профиль', callback_data='profile')
-        btn_search = types.InlineKeyboardButton('🔍 Поиск', callback_data='search')
-        btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
-        markup.add(btn_next, btn_stop, btn_profile, btn_search, btn_help)
-        
-        message = (
-            "🎉 *СОБЕСЕДНИК НАЙДЕН!*\n\n"
-            "💬 *Можете начинать общение!*\n\n"
-            "📋 *Доступные команды:*\n"
-            "• Напишите что-нибудь — отправится собеседнику\n"
-            "• /next — найти нового собеседника\n"
-            "• /stop — завершить диалог\n"
-            "• /profile — ваш профиль\n"
-            "• /search — начать поиск\n\n"
-            "✨ *Приятного общения!*"
-        )
-        
-        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
-        print(f"📨 Уведомление отправлено пользователю {user_id}")
-        
-    except Exception as e:
-        print(f"❌ Ошибка уведомления: {e}")
+def check_gender_compatibility(user1_data, user2_data):
+    """Проверяет совместимость по полу"""
+    if user1_data['gender_pref'] == 'any' and user2_data['gender_pref'] == 'any':
+        return True
+    
+    # Получаем профили
+    profile1 = get_user_profile(user1_data['user_id'])
+    profile2 = get_user_profile(user2_data['user_id'])
+    
+    gender1 = profile1.get('gender', '')
+    gender2 = profile2.get('gender', '')
+    
+    # Проверяем предпочтения
+    if user1_data['gender_pref'] != 'any':
+        if user1_data['gender_pref'] == 'male' and gender2 != 'Мужской':
+            return False
+        if user1_data['gender_pref'] == 'female' and gender2 != 'Женский':
+            return False
+    
+    if user2_data['gender_pref'] != 'any':
+        if user2_data['gender_pref'] == 'male' and gender1 != 'Мужской':
+            return False
+        if user2_data['gender_pref'] == 'female' and gender1 != 'Женский':
+            return False
+    
+    return True
 
-# ======== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========
+def notify_match(user1, user2, category_name):
+    """Отправляет уведомления о найденной паре"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_next = types.InlineKeyboardButton('🔄 Следующий', callback_data='next')
+    btn_stop = types.InlineKeyboardButton('⛔️ Стоп', callback_data='stop')
+    btn_profile = types.InlineKeyboardButton('👤 Профиль', callback_data='profile')
+    btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
+    markup.add(btn_next, btn_stop, btn_profile, btn_help)
+    
+    message = (
+        f"🎉 *СОБЕСЕДНИК НАЙДЕН!*\n\n"
+        f"🏷️ *Категория:* {category_name}\n"
+        f"💬 *Можете начинать общение!*\n\n"
+        f"✨ *Просто напишите сообщение — оно отправится собеседнику.*"
+    )
+    
+    try:
+        bot.send_message(user1, message, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(user2, message, reply_markup=markup, parse_mode="Markdown")
+    except:
+        pass
+
+# ======== ОЧИСТКА ПОЛЬЗОВАТЕЛЯ ========
 def cleanup_user(user_id):
     """Очищает данные пользователя"""
     if user_id in active_pairs:
@@ -132,37 +294,12 @@ def cleanup_user(user_id):
             del active_pairs[partner_id]
         del active_pairs[user_id]
     
-    if user_id in search_queue:
-        search_queue.remove(user_id)
-
-def show_start_buttons(user_id, text):
-    """Показывает главные кнопки"""
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='search')
-    btn_profile = types.InlineKeyboardButton('👤 Профиль', callback_data='profile')
-    btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
-    markup.add(btn_search, btn_profile, btn_help)
+    # Удаляем из очереди поиска
+    search_queue[:] = [u for u in search_queue if u['user_id'] != user_id]
     
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
-
-def show_search_buttons(user_id, text):
-    """Показывает кнопки поиска"""
-    markup = types.InlineKeyboardMarkup()
-    btn_cancel = types.InlineKeyboardButton('❌ Отменить поиск', callback_data='cancel')
-    markup.add(btn_cancel)
-    
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
-
-def show_active_chat_buttons(user_id, text):
-    """Показывает кнопки активного чата"""
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_next = types.InlineKeyboardButton('🔄 Следующий', callback_data='next')
-    btn_stop = types.InlineKeyboardButton('⛔️ Стоп', callback_data='stop')
-    btn_profile = types.InlineKeyboardButton('👤 Профиль', callback_data='profile')
-    btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
-    markup.add(btn_next, btn_stop, btn_profile, btn_help)
-    
-    bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
+    # Очищаем состояние
+    if user_id in user_states:
+        del user_states[user_id]
 
 # ======== КОМАНДА /START ========
 @bot.message_handler(commands=['start'])
@@ -170,278 +307,483 @@ def start(message):
     user_id = message.chat.id
     cleanup_user(user_id)
     
+    # Создаем профиль если нет
+    get_user_profile(user_id)
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='search')
+    btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='search_menu')
     btn_profile = types.InlineKeyboardButton('👤 Мой профиль', callback_data='profile')
     btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
     btn_stats = types.InlineKeyboardButton('📊 Статистика', callback_data='stats')
-    markup.add(btn_search, btn_profile, btn_help, btn_stats)
+    btn_shop = types.InlineKeyboardButton('🛒 Магазин', callback_data='shop')
+    markup.add(btn_search, btn_profile, btn_help, btn_stats, btn_shop)
     
     bot.send_message(
         user_id,
         "👋 *Добро пожаловать в анонимный чат!*\n\n"
         "🎭 *Общайтесь анонимно с людьми со всего мира.*\n\n"
+        "✨ *Новые возможности:*\n"
+        "• 🏷️ 9 категорий для общения\n"
+        "• 🔍 Поиск по полу (премиум)\n"
+        "• ⭐ Система Telegram Stars\n"
+        "• 💎 Премиум подписка\n\n"
         "⚡️ *Быстрый старт:*",
         reply_markup=markup,
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=['search'])
-def search_command(message):
-    user_id = message.chat.id
+# ======== МЕНЮ ПОИСКА ========
+@bot.callback_query_handler(func=lambda call: call.data == 'search_menu')
+def search_menu(call):
+    user_id = call.message.chat.id
     
     if user_id in active_pairs:
-        show_active_chat_buttons(user_id, "❌ У тебя уже есть собеседник!")
+        bot.answer_callback_query(call.id, "❌ У тебя уже есть собеседник!")
         return
     
-    if user_id in search_queue:
-        show_search_buttons(user_id, "⏳ Ты уже в очереди поиска...")
+    # Проверяем доступные функции
+    has_gender = has_gender_search(user_id)
+    has_unlimited = has_unlimited_search(user_id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    for category_name, category_id in CATEGORIES.items():
+        buttons.append(types.InlineKeyboardButton(category_name, callback_data=f'category_{category_id}'))
+    
+    # Добавляем кнопки категорий
+    for i in range(0, len(buttons), 2):
+        if i + 1 < len(buttons):
+            markup.add(buttons[i], buttons[i + 1])
+        else:
+            markup.add(buttons[i])
+    
+    markup.add(types.InlineKeyboardButton('🔙 Назад', callback_data='back'))
+    
+    message = "🏷️ *Выберите категорию для общения:*"
+    
+    if has_gender:
+        message += "\n\n✨ *У вас доступен поиск по полу!*"
+    if has_unlimited:
+        message += "\n♾️ *Безлимитный поиск активен*"
+    
+    try:
+        bot.edit_message_text(
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('category_'))
+def select_category(call):
+    user_id = call.message.chat.id
+    category_id = call.data.replace('category_', '')
+    
+    # Проверяем доступность поиска по полу
+    if has_gender_search(user_id):
+        # Показываем выбор пола собеседника
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        btn_any = types.InlineKeyboardButton('👥 Любой', callback_data=f'gender_pref_any_{category_id}')
+        btn_male = types.InlineKeyboardButton('👨 Мужской', callback_data=f'gender_pref_male_{category_id}')
+        btn_female = types.InlineKeyboardButton('👩 Женский', callback_data=f'gender_pref_female_{category_id}')
+        btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='search_menu')
+        markup.add(btn_any, btn_male, btn_female, btn_back)
+        
+        bot.edit_message_text(
+            "🔍 *Выберите пол собеседника:*",
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    else:
+        # Начинаем поиск без фильтра
+        start_search(user_id, category_id, 'any', call)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('gender_pref_'))
+def select_gender_pref(call):
+    user_id = call.message.chat.id
+    parts = call.data.split('_')
+    gender_pref = parts[2]
+    category_id = parts[3]
+    
+    start_search(user_id, category_id, gender_pref, call)
+
+def start_search(user_id, category_id, gender_pref, call=None):
+    """Начинает поиск собеседника"""
+    if user_id in active_pairs:
+        if call:
+            bot.answer_callback_query(call.id, "❌ У тебя уже есть собеседник!")
         return
     
-    search_queue.append(user_id)
-    show_search_buttons(
-        user_id, 
-        f"🔍 *Ищем собеседника...*\n\n"
-        f"📊 *Позиция в очереди:* {len(search_queue)}\n"
-        f"⏱️ *Ожидайте соединения...*"
+    # Проверяем, не в очереди ли уже
+    for item in search_queue:
+        if item['user_id'] == user_id:
+            if call:
+                bot.answer_callback_query(call.id, "⏳ Ты уже в очереди поиска...")
+            return
+    
+    # Добавляем в очередь
+    search_data = {
+        'user_id': user_id,
+        'gender_pref': gender_pref,
+        'category': category_id,
+        'added_time': time.time()
+    }
+    
+    # Если есть приоритет, ставим в начало
+    profile = get_user_profile(user_id)
+    if 'priority' in profile and profile['priority']:
+        search_queue.insert(0, search_data)
+    else:
+        search_queue.append(search_data)
+    
+    # Показываем сообщение
+    category_name = [k for k, v in CATEGORIES.items() if v == category_id][0]
+    position = len([u for u in search_queue if u['user_id'] != user_id]) + 1
+    
+    markup = types.InlineKeyboardMarkup()
+    btn_cancel = types.InlineKeyboardButton('❌ Отменить поиск', callback_data='cancel')
+    markup.add(btn_cancel)
+    
+    message = f"🔍 *Ищем собеседника...*\n\n🏷️ *Категория:* {category_name}\n"
+    
+    if gender_pref != 'any':
+        gender_text = {'male': '👨 Мужской', 'female': '👩 Женский'}
+        message += f"🚻 *Пол собеседника:* {gender_text[gender_pref]}\n"
+    
+    message += f"📊 *Позиция в очереди:* {position}\n⏱️ *Ожидайте...*"
+    
+    if call:
+        bot.edit_message_text(
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        bot.answer_callback_query(call.id, "🔍 Начинаем поиск...")
+    else:
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
+
+# ======== МАГАЗИН TELEGRAM STARS ========
+@bot.callback_query_handler(func=lambda call: call.data == 'shop')
+def show_shop(call):
+    user_id = call.message.chat.id
+    stars = get_user_stars(user_id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # Кнопки покупки звёзд
+    btn_buy_10 = types.InlineKeyboardButton('⭐ 10 звёзд - 13₽', callback_data='stars_buy_10')
+    btn_buy_50 = types.InlineKeyboardButton('⭐ 50 звёзд - 65₽', callback_data='stars_buy_50')
+    btn_buy_100 = types.InlineKeyboardButton('⭐⭐ 100 звёзд - 130₽', callback_data='stars_buy_100')
+    btn_buy_250 = types.InlineKeyboardButton('⭐⭐⭐ 250 звёзд - 325₽', callback_data='stars_buy_250')
+    btn_buy_500 = types.InlineKeyboardButton('⭐⭐⭐⭐ 500 звёзд - 650₽', callback_data='stars_buy_500')
+    
+    # Премиум подписки
+    btn_premium_week = types.InlineKeyboardButton('🌟 Неделя - 50⭐', callback_data='premium_week')
+    btn_premium_month = types.InlineKeyboardButton('🌟 Месяц - 180⭐', callback_data='premium_month')
+    
+    # Платные функции
+    btn_gender = types.InlineKeyboardButton('🔍 Поиск по полу - 30⭐', callback_data='buy_gender_search')
+    btn_priority = types.InlineKeyboardButton('⚡️ Приоритет - 20⭐', callback_data='buy_priority')
+    btn_unlimited = types.InlineKeyboardButton('♾️ Безлимит на день - 100⭐', callback_data='buy_unlimited')
+    
+    btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='back')
+    
+    markup.add(btn_buy_10, btn_buy_50, btn_buy_100, btn_buy_250, btn_buy_500,
+               btn_premium_week, btn_premium_month,
+               btn_gender, btn_priority, btn_unlimited,
+               btn_back)
+    
+    stars_rub = round(stars * 1.3, 2)
+    premium_status = "✅ АКТИВЕН" if is_premium(user_id) else "❌ НЕТ"
+    
+    message = (
+        f"🛒 *Магазин Telegram Stars*\n\n"
+        f"⭐️ *Ваш баланс:* {stars} звёзд (~{stars_rub}₽)\n"
+        f"🌟 *Премиум статус:* {premium_status}\n\n"
+        f"💫 *Купить звёзды:*\n"
+        f"• 10⭐ - 13₽ (курс: 100⭐ = 130₽)\n"
+        f"• 50⭐ - 65₽ (70% идёт разработчику)\n"
+        f"• 100⭐ - 130₽\n"
+        f"• 250⭐ - 325₽\n"
+        f"• 500⭐ - 650₽\n\n"
+        f"✨ *Премиум подписка:*\n"
+        f"• 1 неделя - 50⭐\n"
+        f"• 1 месяц - 180⭐\n\n"
+        f"⚡️ *Платные функции:*\n"
+        f"• Поиск по полу (24ч) - 30⭐\n"
+        f"• Приоритет в очереди - 20⭐\n"
+        f"• Безлимит на 24ч - 100⭐\n\n"
+        f"💰 *Как купить:*\n"
+        f"1. Выберите пакет звёзд\n"
+        f"2. Оплатите через Telegram\n"
+        f"3. Звёзды поступят моментально"
     )
+    
+    try:
+        bot.edit_message_text(
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(commands=['next'])
-def next_command(message):
-    user_id = message.chat.id
+# ======== ПОКУПКА ЗВЁЗД ========
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stars_buy_'))
+def handle_stars_purchase(call):
+    user_id = call.message.chat.id
+    stars_amount = int(call.data.replace('stars_buy_', ''))
     
-    if user_id not in active_pairs:
-        show_start_buttons(user_id, "❌ У тебя нет активного собеседника.")
-        return
+    # Цена в копейках
+    price_info = STAR_PACKAGES.get(stars_amount, STAR_PACKAGES[100])
+    price_kop = price_info['price']
+    label = price_info['label']
     
-    partner_id = active_pairs[user_id]
-    show_start_buttons(partner_id, "⚠️ *Твой собеседник покинул диалог.*\nМожешь найти нового:")
-    cleanup_user(user_id)
-    search_queue.append(user_id)
-    show_search_buttons(user_id, f"🔄 *Ищем нового собеседника...*\n\n📊 *Позиция в очереди:* {len(search_queue)}")
+    # Создаем инвойс
+    prices = [types.LabeledPrice(label=label, amount=price_kop)]
+    
+    try:
+        bot.send_invoice(
+            chat_id=user_id,
+            title=f"Покупка {stars_amount} звёзд",
+            description=f"Пополнение баланса на {stars_amount} звёзд",
+            provider_token="",  # Для Telegram Stars оставляем пустым
+            currency="RUB",
+            prices=prices,
+            payload=f"stars_{user_id}_{stars_amount}",
+            start_parameter=f"stars_{stars_amount}",
+            need_name=False,
+            need_phone_number=False,
+            need_email=False,
+            need_shipping_address=False,
+            is_flexible=False
+        )
+        
+        bot.answer_callback_query(call.id, "💫 Открывается окно оплаты...")
+        
+    except Exception as e:
+        print(f"❌ Ошибка создания инвойса: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка, попробуйте позже", show_alert=True)
 
-@bot.message_handler(commands=['stop'])
-def stop_command(message):
-    user_id = message.chat.id
-    
-    if user_id in active_pairs:
-        partner_id = active_pairs[user_id]
-        show_start_buttons(partner_id, "❌ *Собеседник завершил диалог.*\nМожешь найти нового:")
-    
-    cleanup_user(user_id)
-    show_start_buttons(user_id, "✅ *Диалог завершён.*\nНайди нового собеседника:")
+# ======== ОБРАБОТКА ПЛАТЕЖЕЙ ========
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def process_pre_checkout(pre_checkout_query):
+    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
-@bot.message_handler(commands=['profile'])
-def profile_command(message):
+@bot.message_handler(content_types=['successful_payment'])
+def handle_successful_payment(message):
     user_id = message.chat.id
+    payment_info = message.successful_payment
+    
+    payload = payment_info.invoice_payload
+    if payload.startswith('stars_'):
+        parts = payload.split('_')
+        if len(parts) >= 3:
+            stars_amount = int(parts[2])
+            
+            # Добавляем звёзды пользователю
+            add_stars(user_id, stars_amount, is_real=True)
+            
+            # Уведомляем
+            bot.send_message(
+                user_id,
+                f"✅ *Оплата успешна!*\n\n"
+                f"💫 Вам начислено: *{stars_amount} звёзд*\n"
+                f"⭐️ Текущий баланс: *{get_user_stars(user_id)} звёзд*\n\n"
+                f"✨ Спасибо за поддержку проекта!\n"
+                f"💰 70% от суммы поступит разработчику.",
+                parse_mode="Markdown"
+            )
+            
+            print(f"💰 Получен платёж: {stars_amount} звёзд от {user_id}")
+
+# ======== ПОКУПКА ПРЕМИУМА И ФУНКЦИЙ ========
+@bot.callback_query_handler(func=lambda call: call.data.startswith('premium_'))
+def handle_premium_purchase(call):
+    user_id = call.message.chat.id
+    stars = get_user_stars(user_id)
+    
+    if 'week' in call.data:
+        cost = PREMIUM_PRICES['week']
+        days = 7
+    else:
+        cost = PREMIUM_PRICES['month']
+        days = 30
+    
+    if stars >= cost:
+        spend_stars(user_id, cost)
+        premium_until = datetime.now() + timedelta(days=days)
+        update_profile_field(user_id, 'premium_until', premium_until.isoformat())
+        
+        bot.answer_callback_query(
+            call.id,
+            f"✅ Премиум активирован на {days} дней!\n"
+            f"⭐ Списано: {cost} звёзд",
+            show_alert=True
+        )
+        show_shop(call)
+    else:
+        bot.answer_callback_query(
+            call.id,
+            f"❌ Недостаточно звёзд!\nНужно: {cost}⭐\nУ вас: {stars}⭐",
+            show_alert=True
+        )
+
+@bot.callback_query_handler(func=lambda call: call.data == 'buy_gender_search')
+def buy_gender_search(call):
+    user_id = call.message.chat.id
+    stars = get_user_stars(user_id)
+    cost = FEATURE_PRICES['gender_search']
+    
+    if stars >= cost:
+        spend_stars(user_id, cost)
+        until = datetime.now() + timedelta(hours=24)
+        update_profile_field(user_id, 'gender_search_until', until.isoformat())
+        
+        bot.answer_callback_query(
+            call.id,
+            f"✅ Поиск по полу активирован на 24 часа!\n"
+            f"⭐ Списано: {cost} звёзд",
+            show_alert=True
+        )
+        show_shop(call)
+    else:
+        bot.answer_callback_query(
+            call.id,
+            f"❌ Недостаточно звёзд!\nНужно: {cost}⭐\nУ вас: {stars}⭐",
+            show_alert=True
+        )
+
+@bot.callback_query_handler(func=lambda call: call.data == 'buy_priority')
+def buy_priority(call):
+    user_id = call.message.chat.id
+    stars = get_user_stars(user_id)
+    cost = FEATURE_PRICES['priority']
+    
+    if stars >= cost:
+        spend_stars(user_id, cost)
+        # Устанавливаем флаг приоритета
+        profile = get_user_profile(user_id)
+        profile['priority'] = True
+        save_user_profile(user_id, profile)
+        
+        bot.answer_callback_query(
+            call.id,
+            f"✅ Приоритет активирован!\n"
+            f"⭐ Списано: {cost} звёзд",
+            show_alert=True
+        )
+        show_shop(call)
+    else:
+        bot.answer_callback_query(
+            call.id,
+            f"❌ Недостаточно звёзд!\nНужно: {cost}⭐\nУ вас: {stars}⭐",
+            show_alert=True
+        )
+
+@bot.callback_query_handler(func=lambda call: call.data == 'buy_unlimited')
+def buy_unlimited(call):
+    user_id = call.message.chat.id
+    stars = get_user_stars(user_id)
+    cost = FEATURE_PRICES['unlimited']
+    
+    if stars >= cost:
+        spend_stars(user_id, cost)
+        until = datetime.now() + timedelta(hours=24)
+        update_profile_field(user_id, 'unlimited_until', until.isoformat())
+        
+        bot.answer_callback_query(
+            call.id,
+            f"✅ Безлимитный поиск активирован на 24 часа!\n"
+            f"⭐ Списано: {cost} звёзд",
+            show_alert=True
+        )
+        show_shop(call)
+    else:
+        bot.answer_callback_query(
+            call.id,
+            f"❌ Недостаточно звёзд!\nНужно: {cost}⭐\nУ вас: {stars}⭐",
+            show_alert=True
+        )
+
+# ======== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ========
+@bot.callback_query_handler(func=lambda call: call.data == 'profile')
+def show_profile(call):
+    user_id = call.message.chat.id
+    profile = get_user_profile(user_id)
+    
+    premium_text = "❌ Нет"
+    if profile.get('premium_until'):
+        try:
+            premium_until = datetime.fromisoformat(profile['premium_until'])
+            if premium_until > datetime.now():
+                premium_text = f"✅ До {premium_until.strftime('%d.%m.%Y')}"
+        except:
+            pass
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_name = types.InlineKeyboardButton('✏️ Имя', callback_data='set_name')
     btn_gender = types.InlineKeyboardButton('🚻 Пол', callback_data='set_gender')
     btn_age = types.InlineKeyboardButton('🎂 Возраст', callback_data='set_age')
+    btn_stars = types.InlineKeyboardButton(f'⭐ {profile.get("stars", 0)} звёзд', callback_data='stars_info')
     btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='back')
-    markup.add(btn_name, btn_gender, btn_age, btn_back)
+    markup.add(btn_name, btn_gender, btn_age, btn_stars, btn_back)
     
-    bot.send_message(
-        user_id,
-        "👤 *Ваш профиль*\n\n📛 *Имя:* Аноним\n🚻 *Пол:* Не указан\n🎂 *Возраст:* Не указан\n\n⚙️ *Настройки:*",
-        reply_markup=markup,
-        parse_mode="Markdown"
+    message = (
+        f"👤 *Ваш профиль*\n\n"
+        f"📛 *Имя:* {profile.get('name', 'Аноним')}\n"
+        f"🚻 *Пол:* {profile.get('gender', 'Не указан')}\n"
+        f"🎂 *Возраст:* {profile.get('age', 'Не указан')}\n"
+        f"⭐ *Звёзды:* {profile.get('stars', 0)}\n"
+        f"💰 *Всего потрачено:* {profile.get('total_spent', 0)}⭐\n"
+        f"💎 *Премиум:* {premium_text}\n"
+        f"🔍 *Поисков:* {profile.get('search_count', 0)}\n\n"
+        f"⚙️ *Настройки:*"
     )
-
-# ======== ОБРАБОТКА СООБЩЕНИЙ ========
-@bot.message_handler(func=lambda msg: True)
-def handle_messages(message):
-    user_id = message.chat.id
-    
-    if user_id in active_pairs:
-        partner_id = active_pairs[user_id]
-        try:
-            bot.send_message(partner_id, message.text)
-        except Exception as e:
-            print(f"❌ Ошибка пересылки: {e}")
-    
-    elif user_id in search_queue:
-        position = search_queue.index(user_id) + 1
-        show_search_buttons(user_id, f"⏳ *Ты всё ещё в поиске...*\n\n📊 *Позиция в очереди:* {position}\n💭 *Совет:* Наберитесь терпения!")
-    else:
-        show_start_buttons(user_id, "🤔 *Кажется, ты не в диалоге...*\nХочешь найти собеседника?")
-
-# ======== ОБРАБОТКА INLINE-КНОПОК ========
-@bot.callback_query_handler(func=lambda call: True)
-def handle_buttons(call):
-    user_id = call.message.chat.id
-    command = call.data
     
     try:
-        bot.delete_message(user_id, call.message.message_id)
+        bot.edit_message_text(
+            message,
+            user_id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
     except:
-        pass
-    
-    # Создаем фиктивное сообщение для обработки
-    class FakeMessage:
-        def __init__(self, chat_id):
-            self.chat = type('obj', (object,), {'id': chat_id})()
-    
-    fake_msg = FakeMessage(user_id)
-    
-    if command == 'search':
-        search_command(fake_msg)
-        bot.answer_callback_query(call.id, "🔍 Начинаем поиск...")
-        
-    elif command == 'cancel':
-        if user_id in search_queue:
-            search_queue.remove(user_id)
-        show_start_buttons(user_id, "✅ *Поиск отменён.*")
-        bot.answer_callback_query(call.id, "✅ Поиск отменён")
-        
-    elif command == 'next':
-        next_command(fake_msg)
-        bot.answer_callback_query(call.id, "🔄 Ищем следующего...")
-        
-    elif command == 'stop':
-        stop_command(fake_msg)
-        bot.answer_callback_query(call.id, "✅ Диалог завершён")
-        
-    elif command == 'profile':
-        profile_command(fake_msg)
-        bot.answer_callback_query(call.id, "👤 Профиль")
-        
-    elif command == 'help':
-        bot.send_message(
-            user_id,
-            "❓ *Помощь по командам*\n\n*/start* - Главное меню\n*/search* - Найти собеседника\n*/next* - Следующий собеседник\n*/stop* - Завершить диалог\n*/profile* - Мой профиль\n\n📌 *Как пользоваться:*\n1. Нажми 'Начать поиск'\n2. Дождись соединения\n3. Общайся анонимно\n4. Используй /next для нового собеседника\n\n📢 *Приглашай друзей:* @OnonChatTg_Bot",
-            parse_mode="Markdown"
-        )
-        bot.answer_callback_query(call.id, "📖 Помощь")
-        
-    elif command == 'stats':
-        bot.send_message(
-            user_id,
-            f"📊 *Статистика*\n\n👥 *В поиске:* {len(search_queue)}\n💬 *Активных диалогов:* {len(active_pairs)//2}\n🌐 *Всего пользователей:* Неизвестно\n\n✨ *Бот работает стабильно!*",
-            parse_mode="Markdown"
-        )
-        bot.answer_callback_query(call.id, "📊 Статистика")
-        
-    elif command == 'back':
-        start(fake_msg)
-        bot.answer_callback_query(call.id, "🔙 Назад")
-        
-    elif command == 'set_name':
-        bot.send_message(user_id, "✏️ *Введите ваше имя:*", parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "✏️ Имя")
-        
-    elif command == 'set_gender':
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_male = types.InlineKeyboardButton('👨 Мужской', callback_data='gender_male')
-        btn_female = types.InlineKeyboardButton('👩 Женский', callback_data='gender_female')
-        btn_other = types.InlineKeyboardButton('🌈 Другой', callback_data='gender_other')
-        btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='back')
-        markup.add(btn_male, btn_female, btn_other, btn_back)
-        
-        bot.send_message(user_id, "🚻 *Выберите ваш пол:*", reply_markup=markup, parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "🚻 Пол")
-    
-    elif command in ['gender_male', 'gender_female', 'gender_other']:
-        genders = {'gender_male': '👨 Мужской', 'gender_female': '👩 Женский', 'gender_other': '🌈 Другой'}
-        bot.send_message(user_id, f"✅ Ваш пол установлен: {genders[command]}")
-        bot.answer_callback_query(call.id, "✅ Сохранено")
+        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
-# ======== ЗАПУСК ========
-if __name__ == "__main__":
-    print("="*50)
-    print("🤖 АНОНИМНЫЙ ЧАТ - ПОДГОТОВКА К ЗАПУСКУ")
-    print("="*50)
+@bot.callback_query_handler(func=lambda call: call.data == 'stars_info')
+def show_stars_info(call):
+    user_id = call.message.chat.id
+    profile = get_user_profile(user_id)
     
-    # 1. ОЧИСТКА ПЕРЕД ЗАПУСКОМ
-    print("🧹 Очистка старых updates и webhook...")
-    cleanup_before_start()
+    markup = types.InlineKeyboardMarkup()
+    btn_shop = types.InlineKeyboardButton('🛒 Магазин', callback_data='shop')
+    btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='profile')
+    markup.add(btn_shop, btn_back)
     
-    # 2. ПРОВЕРКА БОТА
-    try:
-        bot_info_url = f"https://api.telegram.org/bot{TOKEN}/getMe"
-        response = requests.get(bot_info_url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            print(f"✅ Бот активен: @{data['result']['username']}")
-        else:
-            print(f"❌ Ошибка бота: {response.status_code}")
-    except Exception as e:
-        print(f"⚠️ Не удалось проверить бота: {e}")
+    message = (
+        f"⭐️ *Информация о звёздах*\n\n"
+        f"💫 *Текущий баланс:* {profile.get('stars', 0)}⭐\n"
+        f"💰 *Куплено:* {profile.get('real_stars', 0)}⭐\n"
+        f"💸 *Потрачено всего:* {profile.get('total_spent', 0)}⭐\n"
+        f"💎 *Заработано разработчиком:* ~{profile.get('total_earned', 0):.2f}₽\n\n"
+        f"✨ *Курс:* 100⭐ = 130₽\n"
+        f"💳 *Разработчик получает:* 70% от суммы\n\n"
+        f"🚀 Спасибо за поддержку проекта!"
+    )
     
-    # 3. ЗАПУСК ФОНОВЫХ ПРОЦЕССОВ
-    print("🚀 Запуск фоновых процессов...")
-    
-    # Запускаем фоновый поиск
-    search_thread = threading.Thread(target=background_search, daemon=True)
-    search_thread.start()
-    
-    # Функция запуска бота с защитой от 409
-    def safe_polling():
-        """Безопасный polling с обработкой 409 ошибки"""
-        max_retries = 5
-        retry_delay = 10
-        
-        for attempt in range(max_retries):
-            try:
-                print(f"🔄 Попытка запуска polling #{attempt + 1}...")
-                
-                # Очищаем перед каждой попыткой
-                cleanup_before_start()
-                time.sleep(3)  # Ждем
-                
-                # Запускаем polling БЕЗ skip_updates
-                print("🤖 Запускаем polling...")
-                bot.polling(
-                    none_stop=True,
-                    interval=3,
-                    timeout=30,
-                    skip_pending=True,  # ВАЖНО: True вместо False
-                    allowed_updates=["message", "callback_query"]
-                )
-                
-            except Exception as e:
-                error_msg = str(e)
-                print(f"❌ Ошибка polling (попытка {attempt + 1}): {error_msg}")
-                
-                if "409" in error_msg or "Conflict" in error_msg:
-                    print("⚠️ Обнаружен конфликт! Удаляем старые updates...")
-                    cleanup_before_start()
-                    
-                    # Увеличиваем задержку с каждой попыткой
-                    wait_time = retry_delay * (attempt + 1)
-                    print(f"⏳ Ждем {wait_time} секунд перед повторной попыткой...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"⏳ Ждем {retry_delay} секунд перед повторной попыткой...")
-                    time.sleep(retry_delay)
-        
-        print("🔥 Все попытки исчерпаны. Перезапуск через 30 секунд...")
-        time.sleep(30)
-        safe_polling()  # Рекурсивный перезапуск
-    
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=safe_polling, daemon=True)
-    bot_thread.start()
-    
-    print("✅ Фоновые процессы запущены")
-    print(f"📊 В очереди: {len(search_queue)} | Активных пар: {len(active_pairs)//2}")
-    print("="*50)
-    
-    # 4. ЗАПУСК FLASK ДЛЯ RENDER
-    if app:
-        try:
-            port = int(os.environ.get("PORT", 10000))
-            print(f"🌐 Запускаем Flask сервер на порту {port}...")
-            # ВАЖНО: use_reloader=False чтобы не создавался второй процесс
-            app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-        except Exception as e:
-            print(f"⚠️ Ошибка Flask: {e}")
-            # Держим основной поток активным
-            while True:
-                time.sleep(3600)
-    else:
-        print("⚠️ Flask не установлен, бот работает без web-интерфейса")
-        while True:
-            time.sleep(3600)
-
+    bot.edit_message_text(
+        message,
+        user_id,
+        call.message.message_id,
+        reply_markup=markup
