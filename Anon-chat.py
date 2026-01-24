@@ -40,15 +40,15 @@ except ImportError:
     app = None
 
 # ======== НАСТРОЙКИ TELEGRAM STARS ========
-# КУРС: 100 звёзд = 130 рублей
+# КУРС: 1 звезда = 1 рубль
 # Разработчик получает 70% от суммы
 
 STAR_PACKAGES = {
-    10: {"price": 1300, "label": "10 звёзд (13₽)", "rub_price": 13},
-    50: {"price": 6500, "label": "50 звёзд (65₽)", "rub_price": 65},
-    100: {"price": 13000, "label": "100 звёзд (130₽)", "rub_price": 130},
-    250: {"price": 32500, "label": "250 звёзд (325₽)", "rub_price": 325},
-    500: {"price": 65000, "label": "500 звёзд (650₽)", "rub_price": 650},
+    10: {"price": 1000, "label": "10 звёзд (10₽)", "rub_price": 10},
+    50: {"price": 5000, "label": "50 звёзд (50₽)", "rub_price": 50},
+    100: {"price": 10000, "label": "100 звёзд (100₽)", "rub_price": 100},
+    250: {"price": 25000, "label": "250 звёзд (250₽)", "rub_price": 250},
+    500: {"price": 50000, "label": "500 звёзд (500₽)", "rub_price": 500},
 }
 
 # Цены в звёздах для функций в боте
@@ -143,7 +143,8 @@ def add_stars(user_id, amount, is_real=False):
         profile['real_stars'] = profile.get('real_stars', 0) + amount
         profile['total_spent'] = profile.get('total_spent', 0) + amount
         # Рассчитываем примерный заработок в рублях (70% от суммы)
-        earned_rub = (amount * 130 / 100) * 0.7
+        # Теперь 1 звезда = 1 рубль
+        earned_rub = amount * 0.7
         profile['total_earned'] = profile.get('total_earned', 0) + earned_rub
     save_user_profile(user_id, profile)
     logger.info(f"User {user_id} received {amount} stars (real: {is_real})")
@@ -527,11 +528,11 @@ def show_shop(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     
     # Кнопки покупки звёзд (через Stars API)
-    btn_buy_10 = types.InlineKeyboardButton('⭐ 10 звёзд - 13₽', callback_data='stars_buy_10')
-    btn_buy_50 = types.InlineKeyboardButton('⭐ 50 звёзд - 65₽', callback_data='stars_buy_50')
-    btn_buy_100 = types.InlineKeyboardButton('⭐⭐ 100 звёзд - 130₽', callback_data='stars_buy_100')
-    btn_buy_250 = types.InlineKeyboardButton('⭐⭐⭐ 250 звёзд - 325₽', callback_data='stars_buy_250')
-    btn_buy_500 = types.InlineKeyboardButton('⭐⭐⭐⭐ 500 звёзд - 650₽', callback_data='stars_buy_500')
+    btn_buy_10 = types.InlineKeyboardButton('⭐ 10 звёзд - 10₽', callback_data='stars_buy_10')
+    btn_buy_50 = types.InlineKeyboardButton('⭐ 50 звёзд - 50₽', callback_data='stars_buy_50')
+    btn_buy_100 = types.InlineKeyboardButton('⭐⭐ 100 звёзд - 100₽', callback_data='stars_buy_100')
+    btn_buy_250 = types.InlineKeyboardButton('⭐⭐⭐ 250 звёзд - 250₽', callback_data='stars_buy_250')
+    btn_buy_500 = types.InlineKeyboardButton('⭐⭐⭐⭐ 500 звёзд - 500₽', callback_data='stars_buy_500')
     
     # Премиум подписки
     btn_premium_week = types.InlineKeyboardButton('🌟 Неделя - 50⭐', callback_data='premium_week')
@@ -549,19 +550,19 @@ def show_shop(call):
                btn_gender, btn_priority, btn_unlimited,
                btn_back)
     
-    stars_rub = round(stars * 1.3, 2)
+    stars_rub = stars  # Теперь 1 звезда = 1 рубль
     premium_status = "✅ АКТИВЕН" if is_premium(user_id) else "❌ НЕТ"
     
     message = (
         f"🛒 *Магазин Telegram Stars*\n\n"
-        f"⭐️ *Ваш баланс:* {stars} звёзд (~{stars_rub}₽)\n"
+        f"⭐️ *Ваш баланс:* {stars} звёзд ({stars}₽)\n"
         f"🌟 *Премиум статус:* {premium_status}\n\n"
         f"💫 *Купить звёзды:*\n"
-        f"• 10⭐ - 13₽ (курс: 100⭐ = 130₽)\n"
-        f"• 50⭐ - 65₽ (70% идёт разработчику)\n"
-        f"• 100⭐ - 130₽\n"
-        f"• 250⭐ - 325₽\n"
-        f"• 500⭐ - 650₽\n\n"
+        f"• 10⭐ - 10₽ (курс: 1⭐ = 1₽)\n"
+        f"• 50⭐ - 50₽ (70% идёт разработчику)\n"
+        f"• 100⭐ - 100₽\n"
+        f"• 250⭐ - 250₽\n"
+        f"• 500⭐ - 500₽\n\n"
         f"✨ *Премиум подписка:*\n"
         f"• 1 неделя - 50⭐\n"
         f"• 1 месяц - 180⭐\n\n"
@@ -1157,3 +1158,4 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
+
