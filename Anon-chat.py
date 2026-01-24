@@ -793,3 +793,9 @@ def buy_unlimited(call):
                 show_alert=True
             )
     else:
+        # ДОБАВЬТЕ ЭТОТ КОД:
+        bot.answer_callback_query(
+            call.id,
+            f"❌ Недостаточно звёзд!\nНужно: {cost}⭐\nУ вас: {stars}⭐",
+            show_alert=True
+        )
