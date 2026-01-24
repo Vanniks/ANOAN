@@ -44,13 +44,12 @@ except ImportError:
 # Разработчик получает 70% от суммы
 
 STAR_PACKAGES = {
-    10: {"price": 1000, "label": "10 звёзд (10₽)", "rub_price": 10},
-    50: {"price": 5000, "label": "50 звёзд (50₽)", "rub_price": 50},
-    100: {"price": 10000, "label": "100 звёзд (100₽)", "rub_price": 100},
-    250: {"price": 25000, "label": "250 звёзд (250₽)", "rub_price": 250},
-    500: {"price": 50000, "label": "500 звёзд (500₽)", "rub_price": 500},
+    10: {"price": 10, "label": "10 звёзд", "rub_price": 10},     # 10 XTR = 10₽
+    50: {"price": 50, "label": "50 звёзд", "rub_price": 50},     # 50 XTR = 50₽
+    100: {"price": 100, "label": "100 звёзд", "rub_price": 100}, # 100 XTR = 100₽
+    250: {"price": 250, "label": "250 звёзд", "rub_price": 250}, # 250 XTR = 250₽
+    500: {"price": 500, "label": "500 звёзд", "rub_price": 500}, # 500 XTR = 500₽
 }
-
 # Цены в звёздах для функций в боте
 PREMIUM_PRICES = {
     'week': 50,      # 50 звёзд за неделю премиума
@@ -588,7 +587,7 @@ def show_shop(call):
         logger.error(f"Ошибка показа магазина: {e}")
         bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
-# ======== РЕАЛЬНАЯ ПОКУПКА ЗВЁЗД ЧЕРЕЗ TELEGRAM STARS ========
+# ======== ПОКУПКА ЗВЁЗД ЧЕРЕЗ TELEGRAM STARS API ========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('stars_buy_'))
 def handle_stars_purchase(call):
     user_id = call.message.chat.id
@@ -1158,4 +1157,5 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
+
 
