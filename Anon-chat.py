@@ -752,40 +752,256 @@ def show_profile(call):
     
     try:
         bot.edit_message_text(
-            message,
-            user_id,
-            call.message.message_id,
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
-    except:
-        bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda call: call.data == 'stars_info')
-def show_stars_info(call):
+            # ======== ОБРАБОТКА КНОПОК ПРОФИЛЯ ========
+@bot.callback_query_handler(func=lambda call: call.data == 'set_gender')
+def set_gender(call):
     user_id = call.message.chat.id
-    profile = get_user_profile(user_id)
     
-    markup = types.InlineKeyboardMarkup()
-    btn_shop = types.InlineKeyboardButton('🛒 Магазин', callback_data='shop')
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    btn_male = types.InlineKeyboardButton('👨 Мужской', callback_data='save_gender_male')
+    btn_female = types.InlineKeyboardButton('👩 Женский', callback_data='save_gender_female')
+    btn_other = types.InlineKeyboardButton('🌈 Другой', callback_data='save_gender_other')
     btn_back = types.InlineKeyboardButton('🔙 Назад', callback_data='profile')
-    markup.add(btn_shop, btn_back)
-    
-    message = (
-        f"⭐️ *Информация о звёздах*\n\n"
-        f"💫 *Текущий баланс:* {profile.get('stars', 0)}⭐\n"
-        f"💰 *Куплено:* {profile.get('real_stars', 0)}⭐\n"
-        f"💸 *Потрачено всего:* {profile.get('total_spent', 0)}⭐\n"
-        f"💎 *Заработано разработчиком:* ~{profile.get('total_earned', 0):.2f}₽\n\n"
-        f"✨ *Курс:* 100⭐ = 130₽\n"
-        f"💳 *Разработчик получает:* 70% от суммы\n\n"
-        f"🚀 Спасибо за поддержку проекта!"
-    )
+    markup.add(btn_male, btn_female, btn_other, btn_back)
     
     bot.edit_message_text(
-        message,
+        "🚻 *Выберите ваш пол:*",
         user_id,
         call.message.message_id,
         reply_markup=markup,
         parse_mode="Markdown"
     )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('save_gender_'))
+def save_gender(call):
+    user_id = call.message.chat.id
+    gender = call.data.replace('save_gender_', '')
+    
+    gender_text = {'male': 'Мужской', 'female': 'Женский', 'other': 'Другой'}
+    update_profile_field(user_id, 'gender', gender_text[gender])
+    
+    bot.answer_callback_query(call.id, f"✅ Пол сохранен: {gender_text[gender]}")
+    show_profile(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_age')
+def set_age_handler(call):
+    user_id = call.message.chat.id
+    user_states[user_id] = {'awaiting': 'age'}
+    
+    bot.edit_message_text(
+        "🎂 *Введите ваш возраст (число от 13 до 99):*",
+        user_id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_name')
+def set_name_handler(call):
+    user_id = call.message.chat.id
+    user_states[user_id] = {'awaiting': 'name'}
+    
+    bot.edit_message_text(
+        "✏️ *Введите ваше имя (максимум 20 символов):*",
+        user_id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+
+@bot.message_handler(func=lambda msg: msg.chat.id in user_states)
+def handle_profile_input(message):
+    user_id = message.chat.id
+    state = user_states.get(user_id, {})
+    
+    if 'awaiting' in state:
+        if state['awaiting'] == 'age':
+            try:
+                age = int(message.text)
+                if 13 <= age <= 99:
+                    update_profile_field(user_id, 'age', age)
+                    bot.send_message(user_id, f"✅ Возраст сохранен: {age} лет")
+                    del user_states[user_id]
+                else:
+                    bot.send_message(user_id, "❌ Возраст должен быть от 13 до 99 лет")
+            except:
+                bot.send_message(user_id, "❌ Введите корректное число")
+                
+        elif state['awaiting'] == 'name':
+            name = message.text.strip()
+            if 1 <= len(name) <= 20:
+                update_profile_field(user_id, 'name', name)
+                bot.send_message(user_id, f"✅ Имя сохранено: {name}")
+                del user_states[user_id]
+            else:
+                bot.send_message(user_id, "❌ Имя должно быть от 1 до 20 символов")
+
+# ======== ОБРАБОТКА СООБЩЕНИЙ ========
+@bot.message_handler(func=lambda msg: True)
+def handle_messages(message):
+    user_id = message.chat.id
+    
+    if user_id in active_pairs:
+        partner_id = active_pairs[user_id]
+        try:
+            bot.send_message(partner_id, message.text)
+        except:
+            print(f"❌ Ошибка пересылки")
+    
+    elif any(u['user_id'] == user_id for u in search_queue):
+        position = next(i for i, u in enumerate(search_queue) if u['user_id'] == user_id) + 1
+        bot.send_message(user_id, f"⏳ *Ты всё ещё в поиске...*\n\n📊 *Позиция в очереди:* {position}")
+    else:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        btn_search = types.InlineKeyboardButton('🔍 Начать поиск', callback_data='search_menu')
+        btn_profile = types.InlineKeyboardButton('👤 Профиль', callback_data='profile')
+        btn_help = types.InlineKeyboardButton('❓ Помощь', callback_data='help')
+        markup.add(btn_search, btn_profile, btn_help)
+        
+        bot.send_message(
+            user_id,
+            "🤔 *Кажется, ты не в диалоге...*\nХочешь найти собеседника?",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+
+# ======== ОБРАБОТКА КНОПОК ========
+@bot.callback_query_handler(func=lambda call: call.data in ['cancel', 'next', 'stop', 'back', 'help', 'stats'])
+def handle_basic_buttons(call):
+    user_id = call.message.chat.id
+    command = call.data
+    
+    try:
+        bot.delete_message(user_id, call.message.message_id)
+    except:
+        pass
+    
+    if command == 'cancel':
+        cleanup_user(user_id)
+        start(call.message)
+        
+    elif command == 'next':
+        if user_id not in active_pairs:
+            bot.send_message(user_id, "❌ У тебя нет активного собеседника.")
+            return
+        
+        partner_id = active_pairs[user_id]
+        cleanup_user(user_id)
+        bot.send_message(partner_id, "⚠️ *Твой собеседник покинул диалог.*")
+        start(call.message)
+        
+    elif command == 'stop':
+        if user_id in active_pairs:
+            partner_id = active_pairs[user_id]
+            cleanup_user(user_id)
+            bot.send_message(partner_id, "❌ *Собеседник завершил диалог.*")
+        
+        cleanup_user(user_id)
+        start(call.message)
+        
+    elif command == 'back':
+        start(call.message)
+        
+    elif command == 'help':
+        bot.send_message(
+            user_id,
+            "❓ *Помощь*\n\n"
+            "✨ *Как пользоваться:*\n"
+            "1. Нажми 'Начать поиск'\n"
+            "2. Выбери категорию\n"
+            "3. Дождись собеседника\n"
+            "4. Общайся анонимно\n\n"
+            "⚡️ *Команды:*\n"
+            "• /start - главное меню\n"
+            "• /next - следующий собеседник\n"
+            "• /stop - завершить диалог\n\n"
+            "💎 *Премиум функции:*\n"
+            "• Поиск по полу\n"
+            "• Приоритет в очереди\n"
+            "• Безлимитный поиск\n\n"
+            "🛒 *Магазин:* /shop",
+            parse_mode="Markdown"
+        )
+        
+    elif command == 'stats':
+        import shelve
+        with shelve.open(PROFILES_DB) as db:
+            total_users = len(db)
+        
+        profile = get_user_profile(user_id)
+        
+        bot.send_message(
+            user_id,
+            f"📊 *Статистика*\n\n"
+            f"👤 *Ваш профиль:*\n"
+            f"• Имя: {profile.get('name')}\n"
+            f"• Поисков: {profile.get('search_count', 0)}\n"
+            f"• Звёзд: {profile.get('stars', 0)}⭐\n"
+            f"• Потрачено: {profile.get('total_spent', 0)}⭐\n\n"
+            f"🌐 *Общая:*\n"
+            f"• Всего пользователей: {total_users}\n"
+            f"• В поиске: {len(search_queue)}\n"
+            f"• Активных пар: {len(active_pairs)//2}\n\n"
+            f"🚀 *Бот работает стабильно!*",
+            parse_mode="Markdown"
+        )
+
+# ======== ЗАПУСК (ИСПРАВЛЕННЫЙ ДЛЯ RENDER) ========
+if __name__ == "__main__":
+    print("="*50)
+    print("🤖 АНОНИМНЫЙ ЧАТ - TELEGRAM STARS")
+    print(f"🕐 Время запуска: {time.strftime('%H:%M:%S')}")
+    print("="*50)
+    
+    # Очистка перед запуском
+    cleanup_before_start()
+    
+    # Запуск фонового поиска
+    search_thread = threading.Thread(target=background_search, daemon=True)
+    search_thread.start()
+    
+    # Запуск авто-пинга
+    ping_thread = threading.Thread(target=keep_alive, daemon=True)
+    ping_thread.start()
+    
+    print("✅ Все системы запущены!")
+    print(f"📊 Статус: В очереди: {len(search_queue)} | Активных пар: {len(active_pairs)//2}")
+    print("="*50)
+    print("💰 Курс: 100 звёзд = 130 рублей")
+    print("💳 Разработчик получает: 70% от суммы")
+    print("="*50)
+    
+    # Запуск бота в отдельном потоке
+    def start_bot():
+        print("🤖 Запускаем polling бота...")
+        while True:
+            try:
+                bot.polling(
+                    none_stop=True,
+                    interval=3,
+                    timeout=30,
+                    skip_pending=True,
+                    allowed_updates=["message", "callback_query"]
+                )
+            except Exception as e:
+                print(f"❌ Ошибка polling: {e}")
+                print("🔄 Перезапуск через 10 секунд...")
+                time.sleep(10)
+    
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    
+    # Flask должен быть последним и в главном потоке (для Render)
+    if app:
+        try:
+            port = int(os.environ.get("PORT", 10000))
+            print(f"🌐 Запуск Flask сервера на порту {port}...")
+            app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            print(f"⚠️ Ошибка Flask: {e}")
+            # Удерживаем основной поток
+            while True:
+                time.sleep(3600)
+    else:
+        print("⚠️ Flask не установлен")
+        # Удерживаем основной поток
+        while True:
+            time.sleep(3600)
