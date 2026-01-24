@@ -748,9 +748,9 @@ def show_profile(call):
         f"💎 *Премиум:* {premium_text}\n"
         f"🔍 *Поисков:* {profile.get('search_count', 0)}\n\n"
         f"⚙️ *Настройки:*"
-    )
+      )
     
-       try:
+    try:
         bot.edit_message_text(
             message,
             user_id,
@@ -1023,4 +1023,5 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
+
 
