@@ -24,7 +24,24 @@ try:
 except ImportError:
     print("⚠️ Flask не установлен")
     app = None
+# ======== АВТО-ПИНГ ДЛЯ RENDER ========
+def keep_alive():
+    """Периодически пингует себя чтобы Render не засыпал"""
+    import requests
+    while True:
+        try:
+            # Пингуем свой же сервис
+            requests.get("https://anoan-zqhd.onrender.com", timeout=10)
+            print("🔄 Self-ping отправлен для поддержания активности")
+        except Exception as e:
+            print(f"⚠️ Ошибка self-ping: {e}")
+        
+        # Ждем 10 минут между пингами (Render спит после 15-20 мин)
+        time.sleep(10 * 60)  # 10 минут
 
+# Запускаем в отдельном потоке
+ping_thread = threading.Thread(target=keep_alive, daemon=True)
+ping_thread.start()
 # ======== ВАШ ОСНОВНОЙ КОД ========
 search_queue = []
 active_pairs = {}
@@ -427,3 +444,4 @@ if __name__ == "__main__":
         print("⚠️ Flask не установлен, бот работает без web-интерфейса")
         while True:
             time.sleep(3600)
+
