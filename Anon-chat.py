@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = "8236249109:AAFkiU0aYJBYgY12ZwO4ZJFk1M2ZavOJbIE"
+TOKEN = "8320203935:AAHcZbzpis6Gp6cnnon0oeqqlUf_pSTRjgM"
 bot = telebot.TeleBot(TOKEN)
 
 # ======== Flask для Render ========
@@ -1157,5 +1157,6 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
+
 
 
