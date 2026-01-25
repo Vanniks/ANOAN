@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 TOKEN = "8320203935:AAHcZbzpis6Gp6cnnon0oeqqlUf_pSTRjgM"
 bot = telebot.TeleBot(TOKEN)
 
+# ======== ПРОВЕРКА СТАТУСА БОТА ========
+def check_bot_status():
+    """Проверяет статус бота"""
+    try:
+        bot_info = bot.get_me()
+        logger.info(f"🤖 Бот запущен: @{bot_info.username}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения бота: {e}")
+        return False
+
 # ======== Flask для Render ========
 try:
     from flask import Flask
@@ -40,16 +51,17 @@ except ImportError:
     app = None
 
 # ======== НАСТРОЙКИ TELEGRAM STARS ========
-# КУРС: 1 звезда = 1 рубль
-# Разработчик получает 70% от суммы
+# ВАЖНО: Для Telegram Stars цена указывается в копейках!
+# 100 копеек = 1 рубль = 1 звезда
 
 STAR_PACKAGES = {
-    10: {"price": 10, "label": "10 звёзд", "rub_price": 10},     # 10 XTR = 10₽
-    50: {"price": 50, "label": "50 звёзд", "rub_price": 50},     # 50 XTR = 50₽
-    100: {"price": 100, "label": "100 звёзд", "rub_price": 100}, # 100 XTR = 100₽
-    250: {"price": 250, "label": "250 звёзд", "rub_price": 250}, # 250 XTR = 250₽
-    500: {"price": 500, "label": "500 звёзд", "rub_price": 500}, # 500 XTR = 500₽
+    10: {"price": 1000, "label": "10 звёзд", "rub_price": 10},     # 1000 копеек = 10₽
+    50: {"price": 5000, "label": "50 звёзд", "rub_price": 50},     # 5000 копеек = 50₽
+    100: {"price": 10000, "label": "100 звёзд", "rub_price": 100}, # 10000 копеек = 100₽
+    250: {"price": 25000, "label": "250 звёзд", "rub_price": 250}, # 25000 копеек = 250₽
+    500: {"price": 50000, "label": "500 звёзд", "rub_price": 500}, # 50000 копеек = 500₽
 }
+
 # Цены в звёздах для функций в боте
 PREMIUM_PRICES = {
     'week': 50,      # 50 звёзд за неделю премиума
@@ -142,7 +154,7 @@ def add_stars(user_id, amount, is_real=False):
         profile['real_stars'] = profile.get('real_stars', 0) + amount
         profile['total_spent'] = profile.get('total_spent', 0) + amount
         # Рассчитываем примерный заработок в рублях (70% от суммы)
-        # Теперь 1 звезда = 1 рубль
+        # 1 звезда = 1 рубль
         earned_rub = amount * 0.7
         profile['total_earned'] = profile.get('total_earned', 0) + earned_rub
     save_user_profile(user_id, profile)
@@ -367,6 +379,56 @@ def start(message):
         parse_mode="Markdown"
     )
 
+# ======== ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ========
+@bot.message_handler(commands=['checkpayments'])
+def check_payments(message):
+    """Проверяет доступность платежей"""
+    user_id = message.chat.id
+    
+    help_text = (
+        "🔍 *Проверка платежей Telegram Stars*\n\n"
+        "1. *Проверьте у себя:*\n"
+        "   • Откройте @PremiumBot\n"
+        "   • Посмотрите, есть ли кнопка '⭐ Stars'\n"
+        "   • Если есть — Stars доступны\n\n"
+        "2. *В @BotFather:*\n"
+        "   • /mybots → выберите бота\n"
+        "   • Bot Settings → Payments\n"
+        "   • Включите Telegram Stars\n\n"
+        "3. *Если Stars недоступны:*\n"
+        "   • Они пока в бета-тестировании\n"
+        "   • Доступны не во всех странах\n"
+        "   • Следите за обновлениями @telegram\n\n"
+        "💰 *Для тестирования функционала:*\n"
+        "Используйте команду /teststars 100 — получите тестовые звёзды"
+    )
+    
+    bot.send_message(user_id, help_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['teststars'])
+def test_stars(message):
+    """Выдает тестовые звёзды для проверки функционала"""
+    user_id = message.chat.id
+    
+    try:
+        amount = int(message.text.split()[1]) if len(message.text.split()) > 1 else 100
+        add_stars(user_id, amount, is_real=False)
+        
+        bot.send_message(
+            user_id,
+            f"🎮 *Тестовый режим*\n\n"
+            f"💫 Вам начислено: *{amount} тестовых звёзд*\n"
+            f"⭐ Текущий баланс: *{get_user_stars(user_id)}*\n\n"
+            f"✨ Теперь можете протестировать:\n"
+            f"• Покупку премиума\n"
+            f"• Поиск по полу\n"
+            f"• Приоритет в очереди\n\n"
+            f"⚠️ *Это тестовые звёзды, они не списываются с вашего счета*",
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(user_id, "Используйте: /teststars [количество]")
+
 # ======== МЕНЮ ПОИСКА ========
 @bot.callback_query_handler(func=lambda call: call.data == 'search_menu')
 def search_menu(call):
@@ -526,7 +588,7 @@ def show_shop(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
-    # Кнопки покупки звёзд (через Stars API)
+    # Кнопки покупки звёзд
     btn_buy_10 = types.InlineKeyboardButton('⭐ 10 звёзд - 10₽', callback_data='stars_buy_10')
     btn_buy_50 = types.InlineKeyboardButton('⭐ 50 звёзд - 50₽', callback_data='stars_buy_50')
     btn_buy_100 = types.InlineKeyboardButton('⭐⭐ 100 звёзд - 100₽', callback_data='stars_buy_100')
@@ -549,7 +611,7 @@ def show_shop(call):
                btn_gender, btn_priority, btn_unlimited,
                btn_back)
     
-    stars_rub = stars  # Теперь 1 звезда = 1 рубль
+    stars_rub = stars  # 1 звезда = 1 рубль
     premium_status = "✅ АКТИВЕН" if is_premium(user_id) else "❌ НЕТ"
     
     message = (
@@ -587,95 +649,114 @@ def show_shop(call):
         logger.error(f"Ошибка показа магазина: {e}")
         bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
-# ======== ПОКУПКА ЗВЁЗД ЧЕРЕЗ TELEGRAM STARS API ========
+# ======== УЛУЧШЕННАЯ ПОКУПКА ЗВЁЗД ========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('stars_buy_'))
 def handle_stars_purchase(call):
     user_id = call.message.chat.id
     stars_amount = int(call.data.replace('stars_buy_', ''))
     
     # Получаем информацию о пакете
-    price_info = STAR_PACKAGES.get(stars_amount, STAR_PACKAGES[100])
-    price_rub = price_info['rub_price']
-    label = price_info['label']
+    price_info = STAR_PACKAGES.get(stars_amount)
+    if not price_info:
+        price_info = STAR_PACKAGES[100]
+    
+    logger.info(f"Покупка звёзд: user={user_id}, amount={stars_amount}, price={price_info['price']}")
     
     try:
-        # СОЗДАЕМ РЕАЛЬНЫЙ ИНВОЙС ДЛЯ TELEGRAM STARS
-        # Для Telegram Stars оставляем provider_token пустым
-        prices = [types.LabeledPrice(label=label, amount=price_info['price'])]
+        # Создаем инвойс
+        prices = [types.LabeledPrice(label=f"{stars_amount} звёзд", amount=price_info['price'])]
         
-        # Отправляем инвойс
+        # ВАЖНО: Для Telegram Stars используем currency="XTR"
         bot.send_invoice(
             chat_id=user_id,
-            title=f"Покупка {stars_amount} звёзд",
-            description=f"Пополнение баланса на {stars_amount} звёзд для анонимного чата",
-            invoice_payload=f"stars_{user_id}_{stars_amount}",
-            provider_token="",  # Для Telegram Stars оставляем пустым
-            currency="XTR",     # Код валюты для Telegram Stars
+            title=f"⭐ {stars_amount} звёзд",
+            description=f"Пополнение баланса в анонимном чате",
+            invoice_payload=f"stars_{user_id}_{stars_amount}_{int(time.time())}",
+            provider_token="",  # Для Stars оставляем пустым
+            currency="XTR",     # Код валюты Telegram Stars
             prices=prices,
             start_parameter=f"stars_{stars_amount}",
             need_name=False,
             need_phone_number=False,
             need_email=False,
             need_shipping_address=False,
-            is_flexible=False
+            is_flexible=False,
+            request_timeout=30
         )
         
+        logger.info(f"✅ Инвойс отправлен пользователю {user_id}")
         bot.answer_callback_query(call.id, "💫 Открывается окно оплаты...")
         
     except Exception as e:
-        logger.error(f"Ошибка создания инвойса: {e}")
-        bot.answer_callback_query(call.id, "❌ Ошибка, попробуйте позже", show_alert=True)
+        logger.error(f"❌ Ошибка создания инвойса: {e}", exc_info=True)
+        
+        # Предлагаем альтернативу
+        markup = types.InlineKeyboardMarkup()
+        btn_try_again = types.InlineKeyboardButton('🔄 Попробовать ещё раз', callback_data=f'stars_buy_{stars_amount}')
+        btn_support = types.InlineKeyboardButton('👨‍💻 Поддержка', url='https://t.me/durov')
+        markup.add(btn_try_again, btn_support)
+        
+        bot.send_message(
+            user_id,
+            f"⚠️ *Не удалось открыть оплату*\n\n"
+            f"Telegram Stars могут быть временно недоступны.\n\n"
+            f"**Попробуйте:**\n"
+            f"1. Обновить Telegram до последней версии\n"
+            f"2. Проверить, доступны ли Stars в @PremiumBot\n"
+            f"3. Попробовать позже\n\n"
+            f"Или напишите в поддержку Telegram.",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
 
 # ======== ОБРАБОТКА ПРЕДВАРИТЕЛЬНОГО ЗАПРОСА ========
 @bot.pre_checkout_query_handler(func=lambda query: True)
 def process_pre_checkout(pre_checkout_query):
     try:
-        # Всегда подтверждаем запрос
+        logger.info(f"📝 Pre-checkout от {pre_checkout_query.from_user.id}")
+        bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+    except Exception as e:
+        logger.error(f"❌ Ошибка pre-checkout: {e}")
         bot.answer_pre_checkout_query(
             pre_checkout_query.id, 
-            ok=True,
+            ok=False, 
             error_message="Произошла ошибка при обработке платежа"
         )
-        logger.info(f"Pre-checkout approved for {pre_checkout_query.from_user.id}")
-    except Exception as e:
-        logger.error(f"Ошибка pre-checkout: {e}")
-        bot.answer_pre_checkout_query(pre_checkout_query.id, ok=False)
 
 # ======== ОБРАБОТКА УСПЕШНОЙ ОПЛАТЫ ========
 @bot.message_handler(content_types=['successful_payment'])
 def handle_successful_payment(message):
-    user_id = message.chat.id
-    payment_info = message.successful_payment
-    
     try:
-        payload = payment_info.invoice_payload
-        logger.info(f"Получен платёж: {payment_info.total_amount / 100}₽ от {user_id}, payload: {payload}")
+        user_id = message.chat.id
+        payment = message.successful_payment
         
-        # Извлекаем количество звёзд из payload
-        if payload.startswith('stars_'):
-            parts = payload.split('_')
+        logger.info(f"💰 Успешный платёж от {user_id}:")
+        logger.info(f"  Сумма: {payment.total_amount}")
+        logger.info(f"  Валюта: {payment.currency}")
+        logger.info(f"  Payload: {payment.invoice_payload}")
+        
+        if payment.invoice_payload.startswith('stars_'):
+            parts = payment.invoice_payload.split('_')
             if len(parts) >= 3:
                 stars_amount = int(parts[2])
-                
-                # Добавляем звёзды пользователю
                 add_stars(user_id, stars_amount, is_real=True)
                 
-                # Уведомляем пользователя
                 bot.send_message(
                     user_id,
-                    f"✅ *Оплата успешна!*\n\n"
-                    f"💫 Вам начислено: *{stars_amount} звёзд*\n"
-                    f"⭐️ Текущий баланс: *{get_user_stars(user_id)} звёзд*\n\n"
+                    f"🎉 *Оплата успешна!*\n\n"
+                    f"💫 Начислено: *{stars_amount} звёзд*\n"
+                    f"⭐ Текущий баланс: *{get_user_stars(user_id)} звёзд*\n\n"
                     f"✨ Спасибо за поддержку проекта!\n"
                     f"💰 70% от суммы поступит разработчику.",
                     parse_mode="Markdown"
                 )
                 
-                logger.info(f"Начислено {stars_amount} звёзд пользователю {user_id}")
+                logger.info(f"✅ Начислено {stars_amount} звёзд пользователю {user_id}")
         
     except Exception as e:
-        logger.error(f"Ошибка обработки платежа: {e}")
-        bot.send_message(user_id, "⚠️ Произошла ошибка при обработке платежа. Обратитесь в поддержку.")
+        logger.error(f"❌ Ошибка обработки платежа: {e}")
+        if 'user_id' in locals():
+            bot.send_message(user_id, "⚠️ Произошла ошибка при обработке платежа. Обратитесь к администратору.")
 
 # ======== ПОКУПКА ПРЕМИУМА И ФУНКЦИЙ ========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('premium_'))
@@ -942,7 +1023,7 @@ def show_stars_info(call):
         f"💰 *Куплено:* {profile.get('real_stars', 0)}⭐\n"
         f"💸 *Потрачено всего:* {profile.get('total_spent', 0)}⭐\n"
         f"💎 *Заработано разработчиком:* ~{profile.get('total_earned', 0):.2f}₽\n\n"
-        f"✨ *Курс:* 100⭐ = 130₽\n"
+        f"✨ *Курс:* 1⭐ = 1₽\n"
         f"💳 *Разработчик получает:* 70% от суммы\n\n"
         f"🚀 Спасибо за поддержку проекта!"
     )
@@ -1096,12 +1177,17 @@ def handle_basic_buttons(call):
             parse_mode="Markdown"
         )
 
-# ======== ЗАПУСК (ИСПРАВЛЕННЫЙ ДЛЯ RENDER) ========
+# ======== ЗАПУСК ========
 if __name__ == "__main__":
     print("="*50)
     print("🤖 АНОНИМНЫЙ ЧАТ - TELEGRAM STARS")
     print(f"🕐 Время запуска: {time.strftime('%H:%M:%S')}")
     print("="*50)
+    
+    # Проверяем статус бота
+    if not check_bot_status():
+        print("❌ Не удалось подключиться к Telegram API")
+        exit(1)
     
     # Очистка перед запуском
     cleanup_before_start()
@@ -1117,7 +1203,7 @@ if __name__ == "__main__":
     print("✅ Все системы запущены!")
     print(f"📊 Статус: В очереди: {len(search_queue)} | Активных пар: {len(active_pairs)//2}")
     print("="*50)
-    print("💰 Курс: 100 звёзд = 130 рублей")
+    print("💰 Курс: 1 звезда = 1 рубль")
     print("💳 Разработчик получает: 70% от суммы")
     print("="*50)
     
@@ -1157,6 +1243,3 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
-
-
-
