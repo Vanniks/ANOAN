@@ -19,7 +19,7 @@ TOKEN = "8320203935:AAHcZbzpis6Gp6cnnon0oeqqlUf_pSTRjgM"
 bot = telebot.TeleBot(TOKEN)
 
 # ======== НАСТРОЙКИ АДМИНИСТРАТОРОВ ========
-ADMIN_IDS = [8320203935]  # Замените на свой Telegram ID
+ADMIN_IDS = [8516752990]  # Ваш ID
 
 def is_admin(user_id):
     """Проверяет, является ли пользователь администратором"""
@@ -1571,3 +1571,4 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
+
