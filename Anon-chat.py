@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 TOKEN = "8320203935:AAHcZbzpis6Gp6cnnon0oeqqlUf_pSTRjgM"
 bot = telebot.TeleBot(TOKEN)
 
+# ======== НАСТРОЙКИ АДМИНИСТРАТОРОВ ========
+ADMIN_IDS = [8320203935]  # Замените на свой Telegram ID
+
+def is_admin(user_id):
+    """Проверяет, является ли пользователь администратором"""
+    return user_id in ADMIN_IDS
+
 # ======== ПРОВЕРКА СТАТУСА БОТА ========
 def check_bot_status():
     """Проверяет статус бота"""
@@ -239,11 +246,46 @@ def cleanup_before_start():
     except Exception as e:
         logger.error(f"Ошибка cleanup: {e}")
 
+# ======== ОЧИСТКА ЗАВИСШИХ ПОЛЬЗОВАТЕЛЕЙ ========
+def cleanup_stale_searches():
+    """Очищает очередь от пользователей, которые уже не в сети или зависли"""
+    while True:
+        try:
+            current_time = time.time()
+            stale_users = []
+            
+            # Проверяем каждого в очереди
+            for item in search_queue:
+                # Если пользователь в очереди больше 5 минут - удаляем
+                if current_time - item['added_time'] > 300:  # 5 минут
+                    stale_users.append(item['user_id'])
+                    logger.warning(f"⚠️ User {item['user_id']} removed from queue (stale after 5 min)")
+            
+            # Удаляем найденных
+            if stale_users:
+                search_queue[:] = [u for u in search_queue if u['user_id'] not in stale_users]
+                
+                # Очищаем состояния для этих пользователей
+                for user_id in stale_users:
+                    if user_id in user_states:
+                        del user_states[user_id]
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки очереди: {e}")
+        
+        time.sleep(60)  # Проверяем каждую минуту
+
 # ======== ФУНКЦИЯ ФОНОВОГО ПОИСКА ========
 def background_search():
     """Ищет пары в фоне"""
+    last_log_time = 0
     while True:
         try:
+            # Логируем состояние очереди каждые 30 секунд
+            if time.time() - last_log_time > 30:
+                logger.info(f"📊 Очередь: {len(search_queue)} пользователей, пар: {len(active_pairs)//2}")
+                last_log_time = time.time()
+            
             if len(search_queue) >= 2:
                 # Проверяем совместимость
                 for i in range(len(search_queue)):
@@ -267,7 +309,7 @@ def background_search():
                         active_pairs[user1] = user2
                         active_pairs[user2] = user1
                         
-                        logger.info(f"Соединено: {user1} ↔️ {user2}")
+                        logger.info(f"✅ Соединено: {user1} ↔️ {user2}")
                         
                         # Отправляем уведомления
                         category_name = [k for k, v in CATEGORIES.items() if v == user1_data['category']][0]
@@ -379,7 +421,47 @@ def start(message):
         parse_mode="Markdown"
     )
 
-# ======== ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ========
+# ======== КОМАНДА ДЛЯ ПРОВЕРКИ ОЧЕРЕДИ ========
+@bot.message_handler(commands=['queue'])
+def show_queue(message):
+    """Показывает состояние очереди поиска"""
+    user_id = message.chat.id
+    
+    queue_info = f"📊 *Состояние очереди*\n\n"
+    queue_info += f"👥 Всего в очереди: {len(search_queue)}\n"
+    queue_info += f"💬 Активных пар: {len(active_pairs)//2}\n\n"
+    
+    if search_queue:
+        queue_info += "*Очередь:*\n"
+        for i, item in enumerate(search_queue[:10]):  # Показываем первых 10
+            wait_time = int(time.time() - item['added_time'])
+            category_name = [k for k, v in CATEGORIES.items() if v == item['category']][0]
+            gender_pref = {'any': '👥', 'male': '👨', 'female': '👩'}.get(item['gender_pref'], '👥')
+            queue_info += f"{i+1}. {gender_pref} ID:{item['user_id']} | {category_name} | ждёт {wait_time}с\n"
+        
+        if len(search_queue) > 10:
+            queue_info += f"... и ещё {len(search_queue) - 10}\n"
+    else:
+        queue_info += "❌ Очередь пуста\n"
+    
+    bot.send_message(user_id, queue_info, parse_mode="Markdown")
+
+# ======== КОМАНДА ДЛЯ ОЧИСТКИ ОЧЕРЕДИ (АДМИН) ========
+@bot.message_handler(commands=['clearqueue'])
+def clear_queue(message):
+    """Очищает очередь поиска (только для админа)"""
+    user_id = message.chat.id
+    
+    if not is_admin(user_id):
+        bot.send_message(user_id, "❌ У вас нет прав для этой команды")
+        return
+    
+    old_size = len(search_queue)
+    search_queue.clear()
+    logger.warning(f"🧹 Очередь очищена администратором {user_id}")
+    bot.send_message(user_id, f"✅ Очередь очищена. Удалено {old_size} пользователей")
+
+# ======== КОМАНДА ДЛЯ ПРОВЕРКИ ПЛАТЕЖЕЙ ========
 @bot.message_handler(commands=['checkpayments'])
 def check_payments(message):
     """Проверяет доступность платежей"""
@@ -398,36 +480,152 @@ def check_payments(message):
         "3. *Если Stars недоступны:*\n"
         "   • Они пока в бета-тестировании\n"
         "   • Доступны не во всех странах\n"
-        "   • Следите за обновлениями @telegram\n\n"
-        "💰 *Для тестирования функционала:*\n"
-        "Используйте команду /teststars 100 — получите тестовые звёзды"
+        "   • Следите за обновлениями @telegram"
     )
     
     bot.send_message(user_id, help_text, parse_mode="Markdown")
 
-@bot.message_handler(commands=['teststars'])
-def test_stars(message):
-    """Выдает тестовые звёзды для проверки функционала"""
+# ======== АДМИН-КОМАНДЫ ========
+
+@bot.message_handler(commands=['adminstats'])
+def admin_stats(message):
+    """Показывает расширенную статистику (только для админа)"""
     user_id = message.chat.id
     
+    if not is_admin(user_id):
+        bot.send_message(user_id, "❌ У вас нет прав для этой команды")
+        return
+    
+    with shelve.open(PROFILES_DB) as db:
+        total_users = len(db)
+        
+        # Считаем премиум пользователей
+        premium_users = 0
+        for user_key in db:
+            profile = db[user_key]
+            if profile.get('premium_until'):
+                try:
+                    until = datetime.fromisoformat(profile['premium_until'])
+                    if until > datetime.now():
+                        premium_users += 1
+                except:
+                    pass
+        
+        # Считаем общее количество звёзд
+        total_stars = sum(profile.get('stars', 0) for profile in db.values())
+        total_spent = sum(profile.get('total_spent', 0) for profile in db.values())
+        total_earned = sum(profile.get('total_earned', 0) for profile in db.values())
+    
+    stats_text = (
+        f"📊 *Админ-статистика*\n\n"
+        f"👥 *Пользователи:*\n"
+        f"• Всего: {total_users}\n"
+        f"• Премиум: {premium_users}\n"
+        f"• В очереди: {len(search_queue)}\n"
+        f"• В диалогах: {len(active_pairs)}\n\n"
+        f"⭐ *Звёзды:*\n"
+        f"• Всего в системе: {total_stars}\n"
+        f"• Потрачено всего: {total_spent}\n"
+        f"• Заработано: {total_earned:.2f}₽\n\n"
+        f"⚙️ *Команды:*\n"
+        f"/broadcast - Рассылка\n"
+        f"/clearqueue - Очистить очередь"
+    )
+    
+    bot.send_message(user_id, stats_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast_start(message):
+    """Начинает процесс рассылки (только для админа)"""
+    user_id = message.chat.id
+    
+    if not is_admin(user_id):
+        bot.send_message(user_id, "❌ У вас нет прав для этой команды")
+        return
+    
+    bot.send_message(
+        user_id,
+        "📢 *Режим рассылки*\n\n"
+        "Отправьте сообщение, которое хотите разослать всем пользователям.\n"
+        "Поддерживаются: текст, фото, видео, документы, стикеры.\n\n"
+        "✏️ *Чтобы отменить:* /cancel",
+        parse_mode="Markdown"
+    )
+    
+    # Устанавливаем состояние
+    user_states[user_id] = {'awaiting': 'broadcast_message'}
+
+@bot.message_handler(commands=['userinfo'])
+def user_info(message):
+    """Показывает информацию о пользователе по ID (только для админа)"""
+    admin_id = message.chat.id
+    
+    if not is_admin(admin_id):
+        bot.send_message(admin_id, "❌ У вас нет прав для этой команды")
+        return
+    
     try:
-        amount = int(message.text.split()[1]) if len(message.text.split()) > 1 else 100
-        add_stars(user_id, amount, is_real=False)
+        target_id = int(message.text.split()[1])
+        profile = get_user_profile(target_id)
+        
+        info_text = (
+            f"👤 *Информация о пользователе*\n\n"
+            f"🆔 ID: `{target_id}`\n"
+            f"📛 Имя: {profile.get('name', 'Аноним')}\n"
+            f"🚻 Пол: {profile.get('gender', 'Не указан')}\n"
+            f"🎂 Возраст: {profile.get('age', 'Не указан')}\n"
+            f"⭐ Звёзды: {profile.get('stars', 0)}\n"
+            f"💰 Куплено: {profile.get('real_stars', 0)}\n"
+            f"🔍 Поисков: {profile.get('search_count', 0)}\n"
+            f"💎 Премиум: {'✅' if is_premium(target_id) else '❌'}\n"
+            f"📅 Создан: {profile.get('created_at', 'Неизвестно')[:10]}"
+        )
+        
+        bot.send_message(admin_id, info_text, parse_mode="Markdown")
+        
+    except (IndexError, ValueError):
+        bot.send_message(admin_id, "Используйте: /userinfo [ID пользователя]")
+    except Exception as e:
+        bot.send_message(admin_id, f"❌ Ошибка: {e}")
+
+@bot.message_handler(commands=['addstars'])
+def add_stars_admin(message):
+    """Выдаёт звёзды пользователю (только для админа)"""
+    admin_id = message.chat.id
+    
+    if not is_admin(admin_id):
+        bot.send_message(admin_id, "❌ У вас нет прав для этой команды")
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.send_message(admin_id, "Используйте: /addstars [user_id] [количество]")
+            return
+        
+        target_id = int(parts[1])
+        amount = int(parts[2])
+        
+        add_stars(target_id, amount, is_real=True)
         
         bot.send_message(
-            user_id,
-            f"🎮 *Тестовый режим*\n\n"
-            f"💫 Вам начислено: *{amount} тестовых звёзд*\n"
-            f"⭐ Текущий баланс: *{get_user_stars(user_id)}*\n\n"
-            f"✨ Теперь можете протестировать:\n"
-            f"• Покупку премиума\n"
-            f"• Поиск по полу\n"
-            f"• Приоритет в очереди\n\n"
-            f"⚠️ *Это тестовые звёзды, они не списываются с вашего счета*",
-            parse_mode="Markdown"
+            admin_id,
+            f"✅ Выдано {amount} звёзд пользователю {target_id}"
         )
-    except:
-        bot.send_message(user_id, "Используйте: /teststars [количество]")
+        
+        # Уведомляем пользователя
+        try:
+            bot.send_message(
+                target_id,
+                f"🎁 *Вам начислено {amount} звёзд!*\n\n"
+                f"Спасибо за использование бота!",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+        
+    except Exception as e:
+        bot.send_message(admin_id, f"❌ Ошибка: {e}")
 
 # ======== МЕНЮ ПОИСКА ========
 @bot.callback_query_handler(func=lambda call: call.data == 'search_menu')
@@ -611,7 +809,7 @@ def show_shop(call):
                btn_gender, btn_priority, btn_unlimited,
                btn_back)
     
-    stars_rub = stars  # 1 звезда = 1 рубль
+    stars_rub = stars
     premium_status = "✅ АКТИВЕН" if is_premium(user_id) else "❌ НЕТ"
     
     message = (
@@ -649,7 +847,7 @@ def show_shop(call):
         logger.error(f"Ошибка показа магазина: {e}")
         bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
-# ======== УЛУЧШЕННАЯ ПОКУПКА ЗВЁЗД ========
+# ======== ПОКУПКА ЗВЁЗД ЧЕРЕЗ TELEGRAM STARS ========
 @bot.callback_query_handler(func=lambda call: call.data.startswith('stars_buy_'))
 def handle_stars_purchase(call):
     user_id = call.message.chat.id
@@ -1040,6 +1238,131 @@ def show_stars_info(call):
         logger.error(f"Ошибка показа информации о звёздах: {e}")
         bot.send_message(user_id, message, reply_markup=markup, parse_mode="Markdown")
 
+# ======== ОБРАБОТКА СООБЩЕНИЙ С РАССЫЛКОЙ ========
+@bot.message_handler(func=lambda msg: msg.chat.id in user_states and user_states[msg.chat.id].get('awaiting') == 'broadcast_message', content_types=['text', 'photo', 'video', 'document', 'sticker', 'voice', 'audio'])
+def handle_broadcast_message(message):
+    """Получает сообщение для рассылки и отправляет его всем пользователям"""
+    admin_id = message.chat.id
+    
+    if not is_admin(admin_id):
+        return
+    
+    # Отправляем подтверждение
+    confirm_markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_confirm = types.InlineKeyboardButton('✅ Подтвердить', callback_data='broadcast_confirm')
+    btn_cancel = types.InlineKeyboardButton('❌ Отменить', callback_data='broadcast_cancel')
+    confirm_markup.add(btn_confirm, btn_cancel)
+    
+    bot.send_message(
+        admin_id,
+        "⚠️ *Подтверждение рассылки*\n\n"
+        "Это сообщение будет отправлено ВСЕМ пользователям бота.\n"
+        "Вы уверены?",
+        reply_markup=confirm_markup,
+        parse_mode="Markdown"
+    )
+    
+    # Сохраняем сообщение в состоянии
+    user_states[admin_id] = {
+        'awaiting': 'broadcast_confirm',
+        'broadcast_message': message
+    }
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('broadcast_'))
+def handle_broadcast_confirm(call):
+    """Обрабатывает подтверждение или отмену рассылки"""
+    admin_id = call.message.chat.id
+    
+    if not is_admin(admin_id):
+        bot.answer_callback_query(call.id, "❌ Нет прав")
+        return
+    
+    if call.data == 'broadcast_confirm':
+        # Получаем сохраненное сообщение
+        state = user_states.get(admin_id, {})
+        broadcast_msg = state.get('broadcast_message')
+        
+        if not broadcast_msg:
+            bot.answer_callback_query(call.id, "❌ Ошибка: сообщение не найдено")
+            return
+        
+        bot.answer_callback_query(call.id, "📢 Начинаю рассылку...")
+        
+        # Собираем всех пользователей из базы
+        all_users = []
+        with shelve.open(PROFILES_DB) as db:
+            all_users = list(db.keys())
+        
+        bot.send_message(admin_id, f"📊 Начинаю рассылку {len(all_users)} пользователям...")
+        
+        # Счетчики
+        success = 0
+        failed = 0
+        
+        # Отправляем каждому
+        for user_key in all_users:
+            try:
+                target_id = int(user_key)
+                
+                # Копируем сообщение в зависимости от типа
+                if broadcast_msg.text:
+                    bot.send_message(target_id, broadcast_msg.text)
+                elif broadcast_msg.photo:
+                    bot.send_photo(
+                        target_id, 
+                        broadcast_msg.photo[-1].file_id,
+                        caption=broadcast_msg.caption
+                    )
+                elif broadcast_msg.video:
+                    bot.send_video(
+                        target_id,
+                        broadcast_msg.video.file_id,
+                        caption=broadcast_msg.caption
+                    )
+                elif broadcast_msg.document:
+                    bot.send_document(
+                        target_id,
+                        broadcast_msg.document.file_id,
+                        caption=broadcast_msg.caption
+                    )
+                elif broadcast_msg.sticker:
+                    bot.send_sticker(target_id, broadcast_msg.sticker.file_id)
+                elif broadcast_msg.voice:
+                    bot.send_voice(target_id, broadcast_msg.voice.file_id)
+                elif broadcast_msg.audio:
+                    bot.send_audio(target_id, broadcast_msg.audio.file_id)
+                
+                success += 1
+                
+                # Небольшая задержка чтобы не спамить
+                time.sleep(0.05)
+                
+            except Exception as e:
+                failed += 1
+                logger.error(f"Ошибка отправки пользователю {user_key}: {e}")
+        
+        # Отправляем отчет админу
+        bot.send_message(
+            admin_id,
+            f"📊 *Отчет о рассылке*\n\n"
+            f"✅ Успешно: {success}\n"
+            f"❌ Ошибок: {failed}\n"
+            f"👥 Всего: {len(all_users)}",
+            parse_mode="Markdown"
+        )
+        
+    elif call.data == 'broadcast_cancel':
+        bot.send_message(admin_id, "❌ Рассылка отменена")
+    
+    # Очищаем состояние
+    if admin_id in user_states:
+        del user_states[admin_id]
+    
+    try:
+        bot.delete_message(admin_id, call.message.message_id)
+    except:
+        pass
+
 @bot.message_handler(func=lambda msg: msg.chat.id in user_states)
 def handle_profile_input(message):
     user_id = message.chat.id
@@ -1200,6 +1523,11 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=keep_alive, daemon=True)
     ping_thread.start()
     
+    # Запуск очистки старых записей
+    cleanup_thread = threading.Thread(target=cleanup_stale_searches, daemon=True)
+    cleanup_thread.start()
+    print("🧹 Запущена очистка очереди (каждую минуту)")
+    
     print("✅ Все системы запущены!")
     print(f"📊 Статус: В очереди: {len(search_queue)} | Активных пар: {len(active_pairs)//2}")
     print("="*50)
@@ -1243,4 +1571,3 @@ if __name__ == "__main__":
         # Удерживаем основной поток
         while True:
             time.sleep(3600)
-
